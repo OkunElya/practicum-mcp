@@ -1,6 +1,6 @@
 # Scaffold plan: extension + Python MCP bridge
 
-Status: **in progress.** Milestones 1–4 done (bridge, link, `where_am_i`; queue, HUD, approvals, Stop, popup; read tools; navigation and theory actions). Dev builds (`npm run build -- --dev`) add `dev_confirm`, `dev_wait`, `dev_highlight` for live framework checks.
+Status: **in progress.** Milestones 1–5 done (bridge, link, `where_am_i`; queue, HUD, approvals, Stop, popup; read tools; navigation and theory actions; trainer tools). Dev builds (`npm run build -- --dev`) add `dev_confirm`, `dev_wait`, `dev_highlight` for live framework checks.
 
 ## 1. Shape
 
@@ -89,20 +89,20 @@ prompt (on by default, can be switched off in the popup).
 | ✅ `where_am_i` | — | page kind, lesson/task, solved, which actions are available now (next, check, deploy, chat) | read | A, B |
 | ✅ `get_progress` | `course?` | courses → topics → lessons with solved marks and positions like 5.1.3 (profile state, else parsed from the profile page HTML) | read | A3, A10 |
 | ✅ `read_lesson` | `lesson?` (position or id), `offset?` | lesson as text with q1, q2… refs; quizzes with numbered options and answered status, **answer keys stripped**; paged | read | B1, B4 |
-| ✅ `open_lesson` | `lesson` (position or id) | navigate (full load), wait until the content and bottom controls rendered | nav | A8, A1 |
+| ✅ `open_lesson` | `lesson` (position or id) | navigate (full load; practice lessons open at their first unsolved task), wait until the content and bottom controls rendered | nav | A8, A1 |
 | ✅ `go_home` | — | profile page | nav | A1 |
 | ✅ `complete_lesson` | — | "К следующему уроку" / "Перейти к заданию"; lists unanswered blocks if the button is missing; verifies solved + new page | irrev | A11, A12 |
 | ☑️ `press_action_button` | `block` (q-ref) | ActionButton by `theory-action-button-{nodeId}`, waits until the press is saved (not live-tested: no unpressed button available) | irrev | C1 |
 | ☑️ `answer_quiz` | `block`, `answer`, `retry` | flat answer string ("2", "1, 3", "1=B; 2=A", free text) parsed against read_lesson's numbering; fills via UI, submits, waits for the saved attempt, returns what the page shows + correct/incorrect marks. Live-tested: QuizChoice and QuizCards (retries); QuizSelect / QuizText / QuizMacaroni not yet (single attempt) | irrev | C2–C7 |
-| ☑️ `read_task` | — | trainer task text, files, hints count, solved (not yet checked live) | read | B3, E1 |
-| ☑️ `get_code` | `file?` | editor content (not yet checked live) | read | D1, E1 |
-| `set_code` | `code`, `file?` | open the file if needed, replace content via Monaco | rev | D1, E2, E3 |
-| `run_code` | — | serverless run, stdout/stderr; retries platform errors | rev | D2 |
-| `check_task` | — | check, wait for the verdict, retry platform errors; `{solved, message}` | irrev | D3, E8 |
-| `show_hint` | — | press hint, return the next hint text | read | D4 |
-| `next_task` | `direction=next\|prev` | next/previous task or next lesson | nav | A13, A14 |
-| `deploy` | — | web_server deploy, wait for running, return preview URL | rev | E4 |
-| `fetch_preview` | `path="/"` | GET the deployed site | read | E5 |
+| ✅ `read_task` | — | trainer task text, files, hints count, solved, preview URL | read | B3, E1 |
+| ✅ `get_code` | `file?` | live editor text; unopened project files are opened via the file tree first | read | D1, E1 |
+| ✅ `set_code` | `code`, `file?` | open the file via the tree if needed, replace the content with one undoable Monaco edit | rev | D1, E2, E3 |
+| ✅ `run_code` | — | serverless run, exit code/stdout/stderr; retries platform errors | rev | D2 |
+| ☑️ `check_task` | — | check, wait for a new result (attempt id), retry platform errors; solved + checker message. Live-tested on a serverless task; web_server check not yet | irrev | D3, E8 |
+| ✅ `show_hint` | `number?` | presses the hint button and returns the next hint text | read | D4 |
+| ✅ `next_task` | `direction=next\|prev` | «Далее» / icon button «Предыдущее задание» (aria-label), waits for the new task | nav | A13, A14 |
+| ✅ `deploy` | — | web_server deploy, wait for a new running server, return preview URL | rev | E4 |
+| ✅ `fetch_preview` | `path="/"` | GET the deployed site (no cookies) | read | E5 |
 | `ask_platform_ai` | `question` | open chat, type, send, wait for the streamed answer, return text + suggestions | irrev | F1–F3 |
 
 Left out on purpose: survey (C8, user's opinion), topic reset (A17), new AI chat (F5),

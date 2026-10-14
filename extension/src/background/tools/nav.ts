@@ -45,10 +45,15 @@ export const openLesson: Tool = {
     if (here.lesson?.id === id) return `Already open.\n${formatWhere(here)}`;
     const { lesson } = await ctx.page.op<{ lesson: LessonJson & { course_id: string; sprint_id: number; topic_id: string; profession_slug: string } }>('lesson', { lessonId: id });
     const slug = lesson.profession_slug || here.professionSlug;
-    const url = `https://practicum.yandex.ru/learn/${slug}/courses/${lesson.course_id}/sprints/${lesson.sprint_id}/topics/${lesson.topic_id}/lessons/${id}/`;
-    ctx.step(`opening «${lesson.name}»`);
+    // Practice lessons open straight at their first unsolved task in the trainer.
+    const tasks = lesson.tasks ?? [];
+    const task = tasks.find((t) => !t.solved) ?? tasks[0];
+    const url = task
+      ? `https://practicum.yandex.ru/trainer/${slug}/lesson/${id}/task/${task.id}/`
+      : `https://practicum.yandex.ru/learn/${slug}/courses/${lesson.course_id}/sprints/${lesson.sprint_id}/topics/${lesson.topic_id}/lessons/${id}/`;
+    ctx.step(`opening «${lesson.name}»${task ? ` at task ${tasks.indexOf(task) + 1}/${tasks.length}` : ''}`);
     await navigate(ctx, url);
-    const w = await waitForPage(ctx, `lesson «${lesson.name}» to load`, (w) => w.lesson?.id === id);
+    const w = await waitForPage(ctx, `lesson «${lesson.name}» to load`, (w) => w.lesson?.id === id && (!task || w.task?.id === task.id));
     return formatWhere(w);
   },
 };

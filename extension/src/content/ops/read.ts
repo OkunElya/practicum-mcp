@@ -1,6 +1,7 @@
 import { ToolError } from '../../shared/protocol';
 import type { LessonJson, SavedAnswer } from '../../shared/lesson';
-import { api, pageWindow, plain, professionSlug, request, state } from '../page';
+import { api, plain, professionSlug, request, state } from '../page';
+import { findModel, modelPath, openFile } from './trainer';
 
 /** Id of the lesson shown in this tab (theory page or trainer). */
 export function currentLessonId(): string | null {
@@ -137,31 +138,21 @@ export function task(): TaskInfo {
 export interface CodeFile {
   name: string;
   content: string;
-  /** "editor": live editor text (includes unsaved edits); "task": the task's stored file */
-  source: 'editor' | 'task';
 }
 
-/** Editor content. `file` picks one file of a multi-file project; default = the file in the editor. */
-export function code({ file }: { file?: string }): CodeFile {
-  const monaco = pageWindow().monaco;
-  const models: any[] = monaco?.editor ? Array.from(monaco.editor.getModels()) : [];
-  const path = (m: any) => String(m.uri.path).replace(/^\//, '');
-  const t = state()?.trainerReducer?.task;
-  const panes: any[] = t?.panes ? Array.from(t.panes) : [];
-  if (!models.length && !panes.length) throw new ToolError('no code editor on this page');
-
-  if (file) {
-    const want = file.replace(/^\/+/, '');
-    const model = models.find((m) => path(m) === want) ?? models.find((m) => path(m).endsWith(`/${want}`));
-    if (model) return { name: path(model), content: String(model.getValue()), source: 'editor' };
-    const pane = panes.find((p) => p.name === want) ?? panes.find((p) => String(p.name).endsWith(`/${want}`));
-    if (pane) return { name: String(pane.name), content: String(pane.content ?? ''), source: 'task' };
-    const names = (panes.length ? panes.map((p) => p.name) : models.map(path)).join(', ');
-    throw new ToolError(`no file "${file}". Files: ${names}`);
+/**
+ * Editor content (including unsaved edits). `file` picks one file of a
+ * multi-file project, opening it through the file tree if needed, so what is
+ * returned is the live draft, not the task's stored starter version.
+ */
+export async function code({ file }: { file?: string }): Promise<CodeFile> {
+  let model = findModel(file);
+  if (!model && file) {
+    const panes: any[] = state()?.trainerReducer?.task?.panes ? Array.from(state().trainerReducer.task.panes) : [];
+    const known = panes.some((p) => p.name === file || String(p.name).endsWith(`/${file}`));
+    if (!known) throw new ToolError(`no file "${file}". Files: ${panes.map((p) => p.name).join(', ') || 'none'}`);
+    model = await openFile(panes.find((p) => p.name === file || String(p.name).endsWith(`/${file}`)).name);
   }
-  const visible = monaco?.editor ? Array.from(monaco.editor.getEditors() as any[]).find((e) => e.getDomNode()?.offsetParent) : null;
-  const model = visible?.getModel() ?? models[0];
-  if (model) return { name: path(model), content: String(model.getValue()), source: 'editor' };
-  const pane = panes.find((p) => p.opened) ?? panes[0];
-  return { name: String(pane.name), content: String(pane.content ?? ''), source: 'task' };
+  if (!model) throw new ToolError('no code editor on this page');
+  return { name: modelPath(model), content: String(model.getValue()) };
 }

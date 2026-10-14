@@ -92,7 +92,6 @@ export const getCode: Tool = {
   spec: spec('get_code'),
   async run(args, ctx) {
     const f = await ctx.page.op<CodeFile>('code', { file: args.file });
-    const note = f.source === 'task' ? ' (not open in the editor; stored task version)' : '';
-    return `File: ${f.name}${note}\n\`\`\`\n${f.content}\n\`\`\``;
+    return `File: ${f.name}\n\`\`\`\n${f.content}\n\`\`\``;
   },
 };

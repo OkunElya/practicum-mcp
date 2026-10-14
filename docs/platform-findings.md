@@ -376,6 +376,11 @@ like a user. The plan is semantic first, with DOM as the fallback.
   aborted before any click); «Основы промт-инжиниринга» QuizCards re-submitted with the same grouping
   (9/9); **«Работаем с Git» marked solved** via `complete_lesson`. Lessons opened by `open_lesson`
   (extra checkins): «Работаем с Git», «Основы промт-инжиниринга», «История изменения кода» (by the next button).
+- Trainer tool tests (same day): «Работа с базой данных из Python» (6.1.5): `run_code` with a temporary
+  `print` then the original code restored, `set_code` with identical code, tasks 1→2→1, **one extra
+  `check_task` attempt on solved task 1** (approved; attempt 214457099, solved). «Словарь контекста…»
+  (5.4.3), stage 2 (unsolved): opened `ice_cream/urls.py` and rewrote it with identical content, one
+  deploy, preview pages fetched. Nothing checked there.
 
 Quiz answers were chosen by reasoning about the question, not by reading the leaked key.
 
@@ -409,6 +414,11 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
 - Answered quizzes have `quiz_answered` on the block root; per-row results are classes ending in
   `_correct` / `_incorrect` (`quiz-form-matching__prompt_correct`, `quiz__macaroni-pin_status_correct`,
   `quiz__list-item_correct`); radio/checkbox show feedback text instead.
+- `trainerReducer.oldPlaygroundResponse` holds the latest serverless run **or** check result; a check
+  adds `test_result` and a new `attempt_id`. `playgroundResponse` is the web_server check result.
+- Monaco objects reached through `wrappedJSObject` are raw page objects: passing content-script objects
+  to them (`executeEdits` edit lists, `scrollIntoView` options on `getDomNode()`) needs `cloneInto` or
+  re-wrapping with `XPCNativeWrapper`.
 - Saved quiz answers are matched by `content_quiz_id` = the block's **`content.id`** (`expander-{content.id}`
   for action buttons), while the submit request's `id` is the block's **node id**.
 - Socket.io (`connectSocketIONamespace`, `serverhubWsUrl`): purpose unknown (probably notifications/chat).

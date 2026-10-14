@@ -48,7 +48,7 @@
     },
     {
       "name": "get_code",
-      "description": "The code currently in the trainer editor (including unsaved edits). For multi-file projects pass file, e.g. homepage/views.py.",
+      "description": "The code currently in the trainer editor (including unsaved edits). For multi-file projects pass file, e.g. homepage/views.py; a file that isn't open is opened in the editor first.",
       "effect": "read",
       "timeout_s": 20,
       "params": {
@@ -115,6 +115,87 @@
           "type": "boolean",
           "description": "answer again a quiz that allows retries (matching, card sorting)",
           "default": false
+        }
+      }
+    },
+    {
+      "name": "set_code",
+      "description": "Replace the whole content of a file in the trainer editor with code. For multi-file projects pass file (it is opened in the file tree if needed). The user can undo with Ctrl+Z.",
+      "effect": "rev",
+      "timeout_s": 40,
+      "params": {
+        "code": {
+          "type": "string",
+          "description": "the complete new file content"
+        },
+        "file": {
+          "type": "string",
+          "description": "file path in the project, e.g. homepage/views.py; default: the file shown in the editor",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "run_code",
+      "description": "Run the program in the editor without checking it (Python tasks) and return exit code, stdout and stderr. Retries the platform's own errors.",
+      "effect": "rev",
+      "timeout_s": 300,
+      "params": {}
+    },
+    {
+      "name": "check_task",
+      "description": "Submit the code for checking and return whether the task is solved and the checker's message. Each check counts as an attempt. Retries the platform's own errors. Asks the user first.",
+      "effect": "irrev",
+      "timeout_s": 600,
+      "params": {}
+    },
+    {
+      "name": "show_hint",
+      "description": "Show the next hint of the current trainer task (or hint number N).",
+      "effect": "read",
+      "timeout_s": 20,
+      "params": {
+        "number": {
+          "type": "integer",
+          "description": "which hint, starting at 1; default: the next one",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "next_task",
+      "description": "Go to the next trainer task (button «Далее», available after the task is solved; on the last task it opens the next lesson) or the previous one.",
+      "effect": "nav",
+      "timeout_s": 60,
+      "params": {
+        "direction": {
+          "type": "string",
+          "description": "next or prev",
+          "enum": [
+            "next",
+            "prev"
+          ],
+          "default": "next"
+        }
+      }
+    },
+    {
+      "name": "deploy",
+      "description": "Web projects: deploy the current files to a preview server and wait until it runs. Retries the platform's own errors.",
+      "effect": "rev",
+      "timeout_s": 400,
+      "params": {}
+    },
+    {
+      "name": "fetch_preview",
+      "description": "Web projects: GET a page of the deployed preview site and return the HTTP status and HTML.",
+      "effect": "read",
+      "timeout_s": 40,
+      "params": {
+        "path": {
+          "type": "string",
+          "description": "path on the preview site",
+          "default": "/"
         }
       }
     }
