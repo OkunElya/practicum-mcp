@@ -1,6 +1,6 @@
 # Scaffold plan: extension + Python MCP bridge
 
-Status: **in progress.** Milestones 1–2 done (bridge, link, `where_am_i`; queue, HUD, approvals, Stop, popup). Dev builds (`npm run build -- --dev`) add `dev_confirm`, `dev_wait`, `dev_highlight` for live framework checks.
+Status: **in progress.** Milestones 1–3 done (bridge, link, `where_am_i`; queue, HUD, approvals, Stop, popup; read tools). Dev builds (`npm run build -- --dev`) add `dev_confirm`, `dev_wait`, `dev_highlight` for live framework checks.
 
 ## 1. Shape
 
@@ -87,15 +87,15 @@ prompt (on by default, can be switched off in the popup).
 | Tool | Args | Does | Effect | Catalogue |
 |---|---|---|---|---|
 | ✅ `where_am_i` | — | page kind, lesson/task, solved, which actions are available now (next, check, deploy, chat) | read | A, B |
-| `get_progress` | `course?` | courses → topics → lessons with solved and ids (profile state, else API) | read | A3, A10 |
-| `read_lesson` | `lesson_id?` | lesson as Markdown with block ids; quizzes with options and answered status, **answer keys stripped** | read | B1, B4 |
+| ✅ `get_progress` | `course?` | courses → topics → lessons with solved marks and positions like 5.1.3 (profile state, else parsed from the profile page HTML) | read | A3, A10 |
+| ✅ `read_lesson` | `lesson?` (position or id), `offset?` | lesson as text with q1, q2… refs; quizzes with numbered options and answered status, **answer keys stripped**; paged | read | B1, B4 |
 | `open_lesson` | `lesson_id` | navigate (full load if needed), wait until loaded | nav | A8, A1 |
 | `go_home` | — | profile page | nav | A1 |
 | `complete_lesson` | — | "К следующему уроку" / "Перейти к заданию", verify solved + new URL | irrev | A11, A12 |
 | `press_action_button` | `block_id` | ActionButton, verify the following blocks appear | irrev | C1 |
 | `answer_quiz` | `block_id`, `answer` | one flat string per quiz type: select `"opt1, opt2"` (texts or ids) · choice/cards/macaroni `"left=right; …"` · text as is; fills via UI, submits, returns the result shown | irrev | C2–C7 |
-| `read_task` | — | trainer task text, files, hints count, solved | read | B3, E1 |
-| `get_code` | `file?` | editor content | read | D1, E1 |
+| ✅ `read_task` | — | trainer task text, files, hints count, solved | read | B3, E1 |
+| ✅ `get_code` | `file?` | editor content | read | D1, E1 |
 | `set_code` | `code`, `file?` | open the file if needed, replace content via Monaco | rev | D1, E2, E3 |
 | `run_code` | — | serverless run, stdout/stderr; retries platform errors | rev | D2 |
 | `check_task` | — | check, wait for the verdict, retry platform errors; `{solved, message}` | irrev | D3, E8 |

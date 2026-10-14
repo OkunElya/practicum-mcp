@@ -7,6 +7,57 @@
       "effect": "read",
       "timeout_s": 20,
       "params": {}
+    },
+    {
+      "name": "get_progress",
+      "description": "Study progress of the profession: without arguments, the list of courses with solved-lesson counts; with course (number or part of the name), its topics and lessons numbered course.topic.lesson (e.g. 5.1.3) with solved marks.",
+      "effect": "read",
+      "timeout_s": 30,
+      "params": {
+        "course": {
+          "type": "string",
+          "description": "course number from the list, or part of its name",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "read_lesson",
+      "description": "Read a lesson as text, including parts the page still hides. Interactive blocks are marked [q1 …], [q2 …] with their options and whether they are answered. Without lesson, reads the lesson open in the tab. Reading does not open the lesson or mark anything.",
+      "effect": "read",
+      "timeout_s": 30,
+      "params": {
+        "lesson": {
+          "type": "string",
+          "description": "lesson position like 5.1.3 (from get_progress) or lesson id; default: the current lesson",
+          "optional": true
+        },
+        "offset": {
+          "type": "integer",
+          "description": "for long lessons: continue from this character (the output says when)",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "read_task",
+      "description": "The current code-trainer task: description, task number, solved status, project files, number of hints and the deployed preview URL if any.",
+      "effect": "read",
+      "timeout_s": 20,
+      "params": {}
+    },
+    {
+      "name": "get_code",
+      "description": "The code currently in the trainer editor (including unsaved edits). For multi-file projects pass file, e.g. homepage/views.py.",
+      "effect": "read",
+      "timeout_s": 20,
+      "params": {
+        "file": {
+          "type": "string",
+          "description": "file path in the project; default: the file shown in the editor",
+          "optional": true
+        }
+      }
     }
   ]
 }

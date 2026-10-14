@@ -124,6 +124,7 @@ Block types found (walk of 77 lessons):
 | `QuizCards` | sort into groups: `options[{correct_section}]` | **yes**, writes `user_answer: {source: [], sectionId: [optionIds]}`; retryable |
 | `QuizText` | free text: `validations[{type:"strict"\|"regexp", match}]`, `result_text` | **yes**, writes `user_answer: "<text>"`; single attempt |
 | `QuizMacaroni` | match left↔right: `options.left/right.choices`, `shuffle_left/right`, `correct_answers` | **yes**, writes `user_answer: [[leftIdx, rightIdx], …]` |
+| `QuizCoding` | code exercise inside a theory lesson: `panes` (starter), `language`, `hint`, `test` + `answer_panes` (⚠️ leak), `coderun_config` | **yes**; saved `user_answer: {panes, run_only, test_result}`; UI not inspected yet. Very common (57 in 45 sampled lessons) |
 | `QuizFeedback` | survey: `slides[]` (`likert_scale` {statements, grades}, `text` {placeholder}) | writes once at the end: `user_answer: {likertSlideId: {statementId: gradeId}, textSlideId: text}` |
 
 > ⚠️ **The answer keys reach the browser for every quiz type** (`correct`,
@@ -393,4 +394,9 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
 - Where trainer drafts are saved (server vs localStorage) is unknown. The draft survived a reload.
 - Response formats still to capture: failed `check_task`, `run_code`, and submissions for `QuizChoice`, `QuizCards`, `QuizText` and `QuizMacaroni`.
 - `web_server`: request bodies of `servers/` / `check_web_server_task/` and the logs websocket not yet observed. The shape of a failed `test_result` is also unknown. `homework_without_review` hasn't been explored.
+- The profile course tree (`profileReducer.profile`) is server-rendered into `window.__preloadedState__`
+  in the HTML of `/profile/{slug}/`; no API call loads it. `GET /api/v2/professions/{slug}/` returns an
+  error object. Off the profile page, `get_progress` fetches that HTML and parses the state.
+- Saved quiz answers are matched by `content_quiz_id` = the block's **`content.id`** (`expander-{content.id}`
+  for action buttons), while the submit request's `id` is the block's **node id**.
 - Socket.io (`connectSocketIONamespace`, `serverhubWsUrl`): purpose unknown (probably notifications/chat).

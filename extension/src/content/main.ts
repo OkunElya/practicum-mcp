@@ -2,6 +2,7 @@ import { ToolError, type PageRequest, type PageResponse } from '../shared/protoc
 import type { HudState } from '../shared/hud';
 import { highlight, initHud, renderHud } from './hud';
 import { press } from './input';
+import { code, lesson, progress, task } from './ops/read';
 import { where } from './ops/where';
 import { isVisible } from './page';
 
@@ -12,6 +13,10 @@ import { isVisible } from './page';
  */
 const OPS: Record<string, (args: any) => unknown> = {
   where,
+  lesson,
+  progress,
+  task,
+  code,
   hud: (state: HudState) => renderHud(state),
   // used by the dev tools (build.mjs --dev)
   highlight: ({ selector, label }: { selector: string; label: string }) => {

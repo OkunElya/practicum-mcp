@@ -1,3 +1,5 @@
+import { ToolError } from '../shared/protocol';
+
 /**
  * Access to the page's own objects from the isolated content script.
  *
@@ -71,4 +73,38 @@ export function byTestId(id: string): HTMLElement | null {
 
 export function text(el: Element | null | undefined): string {
   return ((el as HTMLElement | null)?.innerText ?? el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Same-origin request as the page makes it (Firefox `content.fetch`: page
+ * origin and cookies). Returns the body text; throws `platform` for the site's
+ * own failures (5xx, 408, 429, network) and `tool` for the rest.
+ */
+export async function request(path: string, init: RequestInit = {}): Promise<string> {
+  const content = (globalThis as any).content;
+  const doFetch: typeof fetch = content?.fetch ? content.fetch.bind(content) : fetch;
+  const what = `${init.method ?? 'GET'} ${path}`;
+  let res: Response;
+  try {
+    res = await doFetch(new URL(path, location.origin).href, { credentials: 'include', ...init });
+  } catch (e) {
+    throw new ToolError(`network error for ${what}: ${(e as Error)?.message ?? e}`, 'platform');
+  }
+  const body = await res.text();
+  if (!res.ok) {
+    const kind = res.status >= 500 || res.status === 408 || res.status === 429 ? 'platform' : 'tool';
+    throw new ToolError(`${what} → ${res.status} ${body.slice(0, 200)}`, kind);
+  }
+  return body;
+}
+
+export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const body = await request(path, { ...init, headers: { accept: 'application/json', ...(init.headers ?? {}) } });
+  return (body ? JSON.parse(body) : null) as T;
+}
+
+/** Profession slug from the URL (/profile|learn|trainer/{slug}/…), else the user's latest one. */
+export function professionSlug(): string | null {
+  const m = location.pathname.match(/^\/(?:profile|learn|trainer)\/([^/]+)/);
+  return m?.[1] ?? pageWindow().__preloadedData__?.me?.latestProfessionSlug ?? null;
 }
