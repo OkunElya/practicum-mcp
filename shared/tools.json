@@ -198,6 +198,18 @@
           "default": "/"
         }
       }
+    },
+    {
+      "name": "ask_platform_ai",
+      "description": "Ask the site's own assistant (Практикум ИИ) a question in the chat of the current lesson or task, wait for its full answer and return it (Russian Markdown) with suggested follow-ups. The assistant already knows the current lesson. Adds to the user's chat history, so it asks the user first.",
+      "effect": "irrev",
+      "timeout_s": 330,
+      "params": {
+        "question": {
+          "type": "string",
+          "description": "the question, as the user would type it"
+        }
+      }
     }
   ]
 }

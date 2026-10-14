@@ -5,6 +5,7 @@ import { press } from './input';
 import { code, lesson, progress, task } from './ops/read';
 import { blockElement, pressActionButton, pressTestId, quizState, quizStep, renderedBlocks, type BlockRef } from './ops/theory';
 import { lessonTasks, setCode, trainerPress, trainerState } from './ops/trainer';
+import { aiOpen, aiSend, aiState } from './ops/ai';
 import { where } from './ops/where';
 import { isVisible } from './page';
 
@@ -28,6 +29,9 @@ const OPS: Record<string, (args: any) => unknown> = {
   trainerPress,
   setCode,
   lessonTasks,
+  aiState,
+  aiOpen,
+  aiSend,
   hud: (state: HudState) => renderHud(state),
   // used by the dev tools (build.mjs --dev)
   highlight: ({ selector, label }: { selector: string; label: string }) => {

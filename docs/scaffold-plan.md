@@ -1,6 +1,6 @@
 # Scaffold plan: extension + Python MCP bridge
 
-Status: **in progress.** Milestones 1–5 done (bridge, link, `where_am_i`; queue, HUD, approvals, Stop, popup; read tools; navigation and theory actions; trainer tools). Dev builds (`npm run build -- --dev`) add `dev_confirm`, `dev_wait`, `dev_highlight` for live framework checks.
+Status: **in progress.** Milestones 1–6 done (bridge, link, `where_am_i`; queue, HUD, approvals, Stop, popup; read tools; navigation and theory actions; trainer tools; platform AI). Dev builds (`npm run build -- --dev`) add `dev_confirm`, `dev_wait`, `dev_highlight` for live framework checks.
 
 ## 1. Shape
 
@@ -103,7 +103,7 @@ prompt (on by default, can be switched off in the popup).
 | ✅ `next_task` | `direction=next\|prev` | «Далее» / icon button «Предыдущее задание» (aria-label), waits for the new task | nav | A13, A14 |
 | ✅ `deploy` | — | web_server deploy, wait for a new running server, return preview URL | rev | E4 |
 | ✅ `fetch_preview` | `path="/"` | GET the deployed site (no cookies) | read | E5 |
-| `ask_platform_ai` | `question` | open chat, type, send, wait for the streamed answer, return text + suggestions | irrev | F1–F3 |
+| ✅ `ask_platform_ai` | `question` | open the chat (retrying the first click), type, send, wait for the streamed answer (progress every ~400 chars), return text + suggested follow-ups | irrev | F1–F3 |
 
 Left out on purpose: survey (C8, user's opinion), topic reset (A17), new AI chat (F5),
 ratings/notes (G), search (backend down). They can be added later.

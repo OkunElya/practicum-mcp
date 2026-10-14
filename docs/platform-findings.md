@@ -380,7 +380,8 @@ like a user. The plan is semantic first, with DOM as the fallback.
   `print` then the original code restored, `set_code` with identical code, tasks 1→2→1, **one extra
   `check_task` attempt on solved task 1** (approved; attempt 214457099, solved). «Словарь контекста…»
   (5.4.3), stage 2 (unsolved): opened `ice_cream/urls.py` and rewrote it with identical content, one
-  deploy, preview pages fetched. Nothing checked there.
+  deploy, preview pages fetched. Nothing checked there. Then, approved: `ask_platform_ai` asked one
+  question in that lesson's chat («Как в шаблоне Django обратиться к значению словаря по ключу?»).
 
 Quiz answers were chosen by reasoning about the question, not by reading the leaked key.
 
