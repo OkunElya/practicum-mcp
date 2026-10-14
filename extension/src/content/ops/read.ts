@@ -13,7 +13,7 @@ export async function lesson({ lessonId }: { lessonId?: string }): Promise<{ les
   const id = lessonId || currentLessonId();
   if (!id) throw new ToolError('this page shows no lesson; pass lesson_id (see get_progress)');
   const [l, answers] = await Promise.all([api<LessonJson>(`/api/lessons/${id}/`), api<SavedAnswer[]>(`/api/lessons/${id}/quizzes/`)]);
-  return { lesson: l, answers: answers.map((a) => ({ content_quiz_id: a.content_quiz_id, user_answer: a.user_answer })) };
+  return { lesson: l, answers: answers.map((a) => ({ content_quiz_id: a.content_quiz_id, user_answer: a.user_answer, attempts_count: a.attempts_count })) };
 }
 
 export interface ProgressTree {
@@ -41,8 +41,8 @@ export async function progress(): Promise<ProgressTree> {
     const start = html.indexOf('window.__preloadedState__ = ');
     const end = html.indexOf('</script>', start);
     if (start < 0 || end < 0) throw new ToolError('profile page has no preloaded state (site changed?)');
-    const json = html.slice(start + 'window.__preloadedState__ = '.length, end).trim().replace(/;$/, '');
-    profile = JSON.parse(json)?.profileReducer?.profile;
+    const literal = html.slice(start + 'window.__preloadedState__ = '.length, end).trim().replace(/;$/, '');
+    profile = parseJsLiteral(literal)?.profileReducer?.profile;
     if (!profile?.courses) throw new ToolError('profile state has no courses (site changed?)');
   }
   return {
@@ -68,6 +68,34 @@ export async function progress(): Promise<ProgressTree> {
       })),
     })),
   };
+}
+
+/**
+ * The embedded state is a JS object literal, not JSON: it contains bare
+ * `undefined` values. Turn those into null (outside strings) and parse.
+ */
+export function parseJsLiteral(src: string): any {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inString) {
+      out += ch;
+      if (ch === '\\') out += src[++i] ?? '';
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') {
+      inString = true;
+      out += ch;
+    } else if (src.startsWith('undefined', i) && !/[\w$]/.test(src[i + 9] ?? '') && !/[\w$]/.test(src[i - 1] ?? '')) {
+      out += 'null';
+      i += 8;
+    } else out += ch;
+  }
+  try {
+    return JSON.parse(out);
+  } catch (e) {
+    throw new ToolError(`profile page state could not be parsed (site changed?): ${(e as Error).message}`);
+  }
 }
 
 export interface TaskInfo {

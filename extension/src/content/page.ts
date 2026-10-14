@@ -71,8 +71,10 @@ export function byTestId(id: string): HTMLElement | null {
   return isVisible(el) ? el : null;
 }
 
+/** Visible text; falls back to textContent while the element is still animating in. */
 export function text(el: Element | null | undefined): string {
-  return ((el as HTMLElement | null)?.innerText ?? el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
+  return clean((el as HTMLElement | null)?.innerText) || clean(el?.textContent);
 }
 
 /**

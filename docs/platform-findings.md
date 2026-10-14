@@ -371,6 +371,11 @@ like a user. The plan is semantic first, with DOM as the fallback.
 - Sprint 14 «Обратная связь» survey: filled in and submitted **by the user** while recorded.
 - «Протокол HTTP…» (sprint 4): QuizText answered "404" (verified with curl first), correct.
 - Asked Практикум ИИ one question in that lesson, which created chat `3743326`.
+- 2026-10-15, live tests of the extension tools (each approved by the user in the page overlay):
+  «Работаем с Git» q3 (QuizChoice) re-submitted with the same answer (`attempts_count` now 3, one try
+  aborted before any click); «Основы промт-инжиниринга» QuizCards re-submitted with the same grouping
+  (9/9); **«Работаем с Git» marked solved** via `complete_lesson`. Lessons opened by `open_lesson`
+  (extra checkins): «Работаем с Git», «Основы промт-инжиниринга», «История изменения кода» (by the next button).
 
 Quiz answers were chosen by reasoning about the question, not by reading the leaked key.
 
@@ -397,6 +402,13 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
 - The profile course tree (`profileReducer.profile`) is server-rendered into `window.__preloadedState__`
   in the HTML of `/profile/{slug}/`; no API call loads it. `GET /api/v2/professions/{slug}/` returns an
   error object. Off the profile page, `get_progress` fetches that HTML and parses the state.
+- Re-submitting a retryable quiz with an identical answer only changes `attempts_count` in
+  `GET …/quizzes/`; tools detect "saved" by answer + `attempts_count`.
+- The bottom `next-lesson-control-button` (and its label) renders ~1 s after the lesson blocks.
+- The embedded `__preloadedState__` is a JS literal with bare `undefined` values, not JSON.
+- Answered quizzes have `quiz_answered` on the block root; per-row results are classes ending in
+  `_correct` / `_incorrect` (`quiz-form-matching__prompt_correct`, `quiz__macaroni-pin_status_correct`,
+  `quiz__list-item_correct`); radio/checkbox show feedback text instead.
 - Saved quiz answers are matched by `content_quiz_id` = the block's **`content.id`** (`expander-{content.id}`
   for action buttons), while the submit request's `id` is the block's **node id**.
 - Socket.io (`connectSocketIONamespace`, `serverhubWsUrl`): purpose unknown (probably notifications/chat).

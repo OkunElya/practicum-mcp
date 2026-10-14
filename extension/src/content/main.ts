@@ -3,6 +3,7 @@ import type { HudState } from '../shared/hud';
 import { highlight, initHud, renderHud } from './hud';
 import { press } from './input';
 import { code, lesson, progress, task } from './ops/read';
+import { blockElement, pressActionButton, pressTestId, quizState, quizStep, renderedBlocks, type BlockRef } from './ops/theory';
 import { where } from './ops/where';
 import { isVisible } from './page';
 
@@ -17,6 +18,11 @@ const OPS: Record<string, (args: any) => unknown> = {
   progress,
   task,
   code,
+  quizStep,
+  quizState,
+  pressActionButton,
+  pressTestId,
+  renderedBlocks,
   hud: (state: HudState) => renderHud(state),
   // used by the dev tools (build.mjs --dev)
   highlight: ({ selector, label }: { selector: string; label: string }) => {
@@ -24,6 +30,10 @@ const OPS: Record<string, (args: any) => unknown> = {
     if (!el) throw new ToolError(`no visible element matches ${selector}`);
     el.scrollIntoView({ block: 'center' });
     highlight(el, label, 2000);
+    return true;
+  },
+  highlightBlock: ({ block, label }: { block: BlockRef; label: string }) => {
+    highlight(blockElement(block), label, 2500);
     return true;
   },
   press: async ({ selector, label }: { selector: string; label: string }) => {

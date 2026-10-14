@@ -58,6 +58,65 @@
           "optional": true
         }
       }
+    },
+    {
+      "name": "open_lesson",
+      "description": "Open a lesson in the user's tab and wait until it has loaded. Opening a lesson marks it as visited on the platform.",
+      "effect": "nav",
+      "timeout_s": 60,
+      "params": {
+        "lesson": {
+          "type": "string",
+          "description": "lesson position like 5.1.3 (from get_progress) or lesson id"
+        }
+      }
+    },
+    {
+      "name": "go_home",
+      "description": "Go to the profession's main (profile) page with the course overview.",
+      "effect": "nav",
+      "timeout_s": 60,
+      "params": {}
+    },
+    {
+      "name": "complete_lesson",
+      "description": "On a theory lesson, press the button at the bottom (\"К следующему уроку\" marks the lesson solved and opens the next one; \"Перейти к заданию\" opens the practice tasks). Fails and lists the blocks still unanswered if the button isn't available yet. Asks the user first.",
+      "effect": "irrev",
+      "timeout_s": 200,
+      "params": {}
+    },
+    {
+      "name": "press_action_button",
+      "description": "Press a button block of the current lesson (shown by read_lesson as [qN · button …]); it reveals the content after it. Asks the user first.",
+      "effect": "irrev",
+      "timeout_s": 200,
+      "params": {
+        "block": {
+          "type": "string",
+          "description": "block ref from read_lesson, e.g. q1"
+        }
+      }
+    },
+    {
+      "name": "answer_quiz",
+      "description": "Answer a quiz block of the current lesson through the page, submit it and return what the page shows (correct/incorrect, explanations). Most quizzes allow ONE attempt, so read the lesson first. Answer format, using read_lesson's numbering: single/multiple choice: option numbers \"2\" or \"1, 3\"; matching, card sorting and connect-the-items: pairs \"1=B; 2=A; 3=C\" covering every item; free text: the text itself. Asks the user first.",
+      "effect": "irrev",
+      "timeout_s": 240,
+      "params": {
+        "block": {
+          "type": "string",
+          "description": "block ref from read_lesson, e.g. q2"
+        },
+        "answer": {
+          "type": "string",
+          "description": "the answer in the format above"
+        },
+        "retry": {
+          "type": "boolean",
+          "description": "answer again a quiz that allows retries (matching, card sorting)",
+          "default": false
+        }
+      }
     }
   ]
 }

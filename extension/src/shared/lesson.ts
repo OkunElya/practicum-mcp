@@ -32,6 +32,8 @@ export interface LessonJson {
 export interface SavedAnswer {
   content_quiz_id: string;
   user_answer: unknown;
+  /** Goes up when a retryable quiz is submitted again (even with the same answer). */
+  attempts_count?: number;
 }
 
 export const INTERACTIVE_TYPES = ['ActionButton', 'QuizSelect', 'QuizChoice', 'QuizCards', 'QuizText', 'QuizMacaroni', 'QuizCoding', 'QuizFeedback'] as const;
@@ -84,7 +86,7 @@ export function findBlock(blocks: InteractiveBlock[], ref: string): InteractiveB
 export const letter = (i: number) => String.fromCharCode(65 + i); // A, B, C…
 
 /** Text of an option/choice that may be a string or {content}. */
-export const optionText = (o: any): string => (typeof o === 'string' ? o : String(o?.content ?? o?.text ?? ''));
+export const optionText = (o: any): string => (typeof o === 'string' ? o : String(o?.content ?? o?.text ?? '')).trim();
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 

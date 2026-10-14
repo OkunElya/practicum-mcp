@@ -1,4 +1,5 @@
 import type { ToolSpec } from '../../shared/specs';
+import { interactiveBlocks, type LessonJson, type SavedAnswer } from '../../shared/lesson';
 import { sleep } from '../page';
 import type { Tool } from '../router';
 
@@ -45,6 +46,21 @@ export const DEV_TOOLS: Tool[] = [
     async run(args, ctx) {
       await ctx.page.op('highlight', { selector: args.selector, label: args.selector });
       return 'highlighted';
+    },
+  },
+  {
+    spec: devSpec({
+      name: 'dev_blocks',
+      description: '[dev] For each interactive block of the open lesson: is its element found on the page (read-only).',
+      effect: 'read',
+      params: {},
+    }),
+    async run(_args, ctx) {
+      const { lesson, answers } = await ctx.page.op<{ lesson: LessonJson; answers: SavedAnswer[] }>('lesson', {});
+      const blocks = interactiveBlocks(lesson.theory, answers);
+      const found = await ctx.page.op<boolean[]>('renderedBlocks', { blocks: blocks.map((b) => ({ nodeId: b.nodeId, contentId: b.contentId })) });
+      for (const [i, b] of blocks.entries()) if (found[i]) await ctx.page.op('highlightBlock', { block: { nodeId: b.nodeId, contentId: b.contentId }, label: b.ref });
+      return blocks.map((b, i) => `${b.ref} ${b.type} ${b.answer ? 'answered' : 'open'}: ${found[i] ? 'found' : 'NOT found'}`).join('\n') || 'no interactive blocks';
     },
   },
 ];

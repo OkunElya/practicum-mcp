@@ -36,7 +36,7 @@ export async function press(target: HTMLElement, label: string): Promise<void> {
   await show(target, label);
   if ((target as HTMLButtonElement).disabled) throw new ToolError(`"${label}" is disabled`);
   const r = target.getBoundingClientRect();
-  const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, view: pageWindow() };
+  const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
   const pointer = { ...at, pointerId: 1, pointerType: 'mouse', isPrimary: true };
   fire(target, 'pointerover', 'PointerEvent', pointer);
   fire(target, 'pointerdown', 'PointerEvent', { ...pointer, buttons: 1 });
@@ -61,7 +61,7 @@ export async function setText(target: HTMLInputElement | HTMLTextAreaElement, te
 }
 
 export async function pressKey(target: HTMLElement, key: string): Promise<void> {
-  const init = { key, code: key, keyCode: key === 'Enter' ? 13 : key === 'Escape' ? 27 : 0, view: pageWindow() };
+  const init = { key, code: key, keyCode: key === 'Enter' ? 13 : key === 'Escape' ? 27 : 0 };
   fire(target, 'keydown', 'KeyboardEvent', init);
   fire(target, 'keyup', 'KeyboardEvent', init);
 }

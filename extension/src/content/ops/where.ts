@@ -31,6 +31,8 @@ export interface WhereInfo {
   aiChatOpen: boolean;
   controls: Control[];
   storeFound: boolean;
+  /** The page's main content has rendered (lesson blocks, editor, course grid). */
+  contentReady: boolean;
 }
 
 /** Buttons that matter to tools, by test-id (see docs/actions.md). */
@@ -104,5 +106,13 @@ export function where(): WhereInfo {
     aiChatOpen: !!s?.chatYaGPT?.aiChatReducer?.isChatOpened,
     controls,
     storeFound: !!s,
+    contentReady:
+      kind === 'lesson'
+        ? !!document.querySelector('[class*="theory-viewer__block"]')
+        : kind === 'trainer'
+          ? !!document.querySelector('.monaco-editor, [class*="theory-viewer__block"]')
+          : kind === 'profile'
+            ? !!document.querySelector('.course-card')
+            : true,
   };
 }
