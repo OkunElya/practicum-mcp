@@ -1,16 +1,18 @@
 {
-  "name": "practicum_mcp",
+  "name": "practicum-mcp",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Practicum MCP: Firefox extension + Python MCP bridge",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "build": "node extension/build.mjs",
+    "watch": "node extension/build.mjs --watch",
+    "typecheck": "tsc -p extension"
   },
-  "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "devDependencies": {
+    "@types/firefox-webext-browser": "^143.0.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "esbuild": "^0.28.2",

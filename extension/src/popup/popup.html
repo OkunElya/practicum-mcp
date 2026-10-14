@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Practicum MCP</title>
+  <style>
+    :root { color-scheme: light dark; --muted: #777; --ok: #2a8a2a; --bad: #c33; }
+    body { font: 13px system-ui, sans-serif; width: 300px; margin: 0; padding: 12px; }
+    h1 { font-size: 14px; margin: 0 0 8px; }
+    #status { padding: 6px 8px; border-radius: 4px; background: #8882; margin-bottom: 10px; }
+    #status.connected { color: var(--ok); }
+    #status.bad_token, #status.disconnected { color: var(--bad); }
+    label { display: block; margin: 8px 0 2px; color: var(--muted); }
+    input[type=text], input[type=password] { width: 100%; box-sizing: border-box; padding: 4px; }
+    .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+    .row label { margin: 0; color: inherit; }
+    .buttons { display: flex; gap: 6px; margin-top: 12px; }
+    button { flex: 1; padding: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Practicum MCP</h1>
+  <div id="status">…</div>
+  <label for="url">Bridge URL</label>
+  <input id="url" type="text" spellcheck="false">
+  <label for="token">Token (printed by the bridge on start)</label>
+  <input id="token" type="password" spellcheck="false">
+  <div class="row">
+    <input id="confirm" type="checkbox">
+    <label for="confirm">Ask me before irreversible actions</label>
+  </div>
+  <div class="buttons">
+    <button id="save">Save &amp; connect</button>
+    <button id="reconnect">Reconnect</button>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

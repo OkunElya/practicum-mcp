@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Practicum MCP",
+  "version": "0.1.0",
+  "description": "Lets an MCP client (via the local Python bridge) act in your Yandex Practicum tab, visibly and with your approval.",
+  "browser_specific_settings": {
+    "gecko": { "id": "practicum-mcp@local", "strict_min_version": "128.0" }
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "https://practicum.yandex.ru/*",
+    "https://*.serverhub.praktikum-services.ru/*"
+  ],
+  "background": { "scripts": ["background.js"], "persistent": true },
+  "content_scripts": [
+    { "matches": ["https://practicum.yandex.ru/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "browser_action": { "default_title": "Practicum MCP", "default_popup": "popup.html" }
+}

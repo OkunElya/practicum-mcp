@@ -1,7 +1,6 @@
 # Scaffold plan: extension + Python MCP bridge
 
-Status: **proposal, not implemented.** The only thing created so far is `bridge/`, an empty
-uv project with `mcp` 2.3.0 and `websockets` 17.2.
+Status: **in progress.** Milestone 1 done (bridge, link, `where_am_i` end to end).
 
 ## 1. Shape
 
@@ -72,9 +71,10 @@ for small models) and the fiber helpers from `react.ts`, moved into the extensio
 |---|---|
 | ext → bridge | `{"type":"hello","token","version","tools":[…specs]}` → `{"type":"welcome"}` or close 4401 |
 | bridge → ext | `{"type":"call","id","tool","args"}` |
+| bridge → ext | `{"type":"cancel","id"}` when the MCP request is cancelled or times out |
 | ext → bridge | `{"type":"progress","id","text"}` (forwarded as MCP progress / log) |
 | ext → bridge | `{"type":"result","id","ok":true,"output"}` or `{"ok":false,"error","kind"}` with kind `tool` · `platform` · `denied` · `stopped` · `timeout` · `no_tab` |
-| both | `ping` / `pong` every 20 s |
+| — | liveness: WebSocket protocol pings (websockets default, 20 s); no app-level ping |
 
 The MCP result is text. Errors return `isError: true` with a message the model can act on
 (e.g. "platform error 400.py.checkTask after 3 retries, try again later", "user denied").
@@ -86,7 +86,7 @@ prompt (on by default, can be switched off in the popup).
 
 | Tool | Args | Does | Effect | Catalogue |
 |---|---|---|---|---|
-| `where_am_i` | — | page kind, lesson/task, solved, which actions are available now (next, check, deploy, chat) | read | A, B |
+| ✅ `where_am_i` | — | page kind, lesson/task, solved, which actions are available now (next, check, deploy, chat) | read | A, B |
 | `get_progress` | `course?` | courses → topics → lessons with solved and ids (profile state, else API) | read | A3, A10 |
 | `read_lesson` | `lesson_id?` | lesson as Markdown with block ids; quizzes with options and answered status, **answer keys stripped** | read | B1, B4 |
 | `open_lesson` | `lesson_id` | navigate (full load if needed), wait until loaded | nav | A8, A1 |

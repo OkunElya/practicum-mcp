@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "where_am_i",
+      "description": "Describe the user's current Yandex Practicum page: page kind (profile, theory lesson, trainer), lesson and task with their solved status, and which actions are available right now. Call this first and after anything unexpected.",
+      "effect": "read",
+      "timeout_s": 20,
+      "params": {}
+    }
+  ]
+}
