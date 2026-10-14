@@ -1,0 +1,122 @@
+# Practicum MCP
+
+Lets an MCP client (Claude Code, a small local LLM agent, …) study on
+[Yandex Practicum](https://practicum.yandex.ru) in **your own logged-in browser tab**:
+read lessons and progress, answer quizzes, write and check code, ask the platform's
+AI. Every action is visible on the page and can be stopped; anything that records
+something on your account waits for your approval.
+
+```
+MCP client ──HTTP /mcp──▶ Python bridge (bridge/) ◀──WebSocket── Firefox/Waterfox extension (extension/)
+             127.0.0.1:8766                          127.0.0.1:8765        acts in the practicum.yandex.ru tab
+```
+
+The extension dials out to the bridge because browser extensions can't listen on
+ports. Both ports bind to 127.0.0.1 only. The bridge accepts only an extension
+origin presenting its pairing token.
+
+## Setup
+
+Requirements: Firefox or Waterfox ≥ 128, Node.js, [uv](https://docs.astral.sh/uv/).
+
+1. **Bridge**
+   ```sh
+   cd bridge
+   uv run practicum-bridge          # MCP at http://127.0.0.1:8766/mcp
+   ```
+   On first start it creates a pairing token in `~/.config/practicum-mcp/token` and
+   prints it.
+
+2. **Extension**
+   ```sh
+   npm install
+   npm run build                    # → extension/dist/
+   ```
+   In the browser open `about:debugging#/runtime/this-firefox` → *Load Temporary
+   Add-on…* → pick `extension/dist/manifest.json`. A temporary add-on stays until the
+   browser restarts. A permanent install needs a signed build, or a browser that
+   allows unsigned add-ons.
+
+3. **Pair**: click the toolbar button *Practicum MCP*, paste the token, *Save &
+   connect*. The badge turns green ("on") and an overlay appears in Practicum tabs.
+
+4. **Connect a client**, e.g. Claude Code:
+   ```sh
+   claude mcp add --transport http practicum http://127.0.0.1:8766/mcp
+   ```
+   Clients that only launch stdio servers can run `uv run --directory bridge
+   practicum-bridge --stdio` instead. Only one bridge can own the extension port at
+   a time.
+
+For a quick manual test without a client: `cd bridge && uv run practicum-call` lists
+the tools, `uv run practicum-call where_am_i` calls one.
+
+## Tools
+
+| Tool | What it does | Effect |
+|---|---|---|
+| `where_am_i` | current page, lesson/task, solved state, buttons available | read |
+| `get_progress` | courses → topics → lessons with solved marks, numbered like `5.1.3` | read |
+| `read_lesson` | a lesson as text, quizzes as `q1`, `q2`… with numbered options; answer keys stripped | read |
+| `read_task`, `get_code` | trainer task, files, hints count; live editor content | read |
+| `open_lesson`, `go_home`, `next_task` | navigation (opening a lesson marks it visited) | nav |
+| `complete_lesson` | "К следующему уроку" / "Перейти к заданию" | **asks first** |
+| `press_action_button`, `answer_quiz` | theory buttons and quizzes (`"2"`, `"1, 3"`, `"1=B; 2=A"`, free text) | **asks first** |
+| `set_code` | replace a file in the editor (undo with Ctrl+Z) | reversible |
+| `run_code`, `deploy`, `fetch_preview` | run Python, deploy a Django project, read its pages | reversible / read |
+| `check_task` | submit for checking (an attempt) | **asks first** |
+| `show_hint` | next hint of the task | read |
+| `ask_platform_ai` | ask Практикум ИИ in the lesson's chat | **asks first** |
+
+The tool list is defined once in [`shared/tools.json`](shared/tools.json), and the
+descriptions there are written for small models. Errors carry a kind: `platform`
+(the site's own failures, retried automatically and worth retrying later), `denied`
+(you said no), `stopped`, `timeout`, `no_tab`, `tool`.
+
+## Staying in control
+
+- **Overlay** (bottom right of every Practicum tab): the running tool, the step log,
+  **Stop**, and **Approve / Deny** for actions that change your account. Each element
+  is highlighted before it is clicked or typed into.
+- **Toolbar popup**: connection state, recent log, *Stop all actions*, and the
+  "Ask me before irreversible actions" switch (on by default).
+- Tools run one at a time. Stop cancels the running one and everything queued. If
+  the bridge disconnects, everything stops.
+- Never automated: the sprint feedback survey (it's your opinion), topic reset,
+  starting a new AI chat, ratings.
+
+## Development
+
+```sh
+npm run typecheck && npm test                 # extension: tsc + vitest
+(cd bridge && uv run pytest)                  # bridge
+npm run build -- --dev                        # test build: dev_* tools + token baked in
+node scripts/dev/install-ext.mjs              # install it into a browser started with
+                                              #   --remote-debugging-port 9222 (WebDriver BiDi)
+```
+
+Never share a `--dev` build: it contains your token.
+
+Layout:
+
+```
+shared/tools.json          tool specs (extension + bridge)
+bridge/                    Python: WebSocket link + MCP server (uv project)
+extension/src/background/  link, queue/router, approvals, activity log, tool macros (tools/)
+extension/src/content/     page access (Redux store, Monaco via wrappedJSObject), input, overlay, ops/
+extension/src/shared/      protocol, lesson renderer, answer parser
+scripts/inspect/           probes used to map the site (BiDi + puppeteer-core)
+docs/                      platform findings, action catalogue, scaffold plan
+```
+
+How the site works, and why the tools do what they do:
+[`docs/platform-findings.md`](docs/platform-findings.md),
+[`docs/actions.md`](docs/actions.md), [`docs/scaffold-plan.md`](docs/scaffold-plan.md).
+
+### Known gaps
+
+- Not yet checked live: `press_action_button`; `answer_quiz` for single-attempt types
+  (radio/checkbox, free text, connect-the-items); `check_task` on Django projects.
+- `QuizCoding` (code exercises inside theory lessons) is shown by `read_lesson` but
+  can't be answered by a tool yet.
+- Search, notes, ratings and the AI summary button have no tools.

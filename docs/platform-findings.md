@@ -6,8 +6,7 @@ extension. These are the inspection results the tool layer will be designed from
 Collected 2026-10-14/15 on the user's logged-in session (profession `ap-backend-st`),
 using the scripts in [`scripts/inspect/`](../scripts/inspect/).
 
-Status: **information gathering only.** No extension or tool code is final yet. The
-drafts in `src/tools/` came before this inspection and must be revisited.
+Status: inspection complete; the extension and bridge built from it are in `extension/` and `bridge/`.
 
 ---
 
