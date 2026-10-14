@@ -1,5 +1,4 @@
 import type { WhereInfo } from '../../content/ops/where';
-import { pageOp, targetTab } from '../page';
 import type { Tool } from '../router';
 import { spec } from './spec';
 
@@ -12,10 +11,8 @@ const KIND_LABEL: Record<WhereInfo['kind'], string> = {
 
 export const whereAmI: Tool = {
   spec: spec('where_am_i'),
-  async run() {
-    const tab = await targetTab();
-    const w = await pageOp<WhereInfo>(tab.id!, 'where');
-    return formatWhere(w);
+  async run(_args, ctx) {
+    return formatWhere(await ctx.page.op<WhereInfo>('where'));
   },
 };
 

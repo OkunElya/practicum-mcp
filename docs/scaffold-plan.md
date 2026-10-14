@@ -1,6 +1,6 @@
 # Scaffold plan: extension + Python MCP bridge
 
-Status: **in progress.** Milestone 1 done (bridge, link, `where_am_i` end to end).
+Status: **in progress.** Milestones 1–2 done (bridge, link, `where_am_i`; queue, HUD, approvals, Stop, popup). Dev builds (`npm run build -- --dev`) add `dev_confirm`, `dev_wait`, `dev_highlight` for live framework checks.
 
 ## 1. Shape
 

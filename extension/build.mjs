@@ -1,7 +1,8 @@
 // Bundle the extension into extension/dist/ (load that folder as a temporary add-on).
-// Usage: node extension/build.mjs [--watch] [--dev-token]
-//   --dev-token  bake the bridge token (~/.config/practicum-mcp/token) in as the default,
-//                for test installs without the popup. Never ship such a build.
+// Usage: node extension/build.mjs [--watch] [--dev]
+//   --dev  test build: adds the dev_* tools and bakes the bridge token
+//          (~/.config/practicum-mcp/token) in as the default, so a temporary install
+//          connects without the popup. Never ship such a build.
 import { cpSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,7 +12,8 @@ import * as esbuild from 'esbuild';
 const root = dirname(fileURLToPath(import.meta.url));
 const out = join(root, 'dist');
 const watch = process.argv.includes('--watch');
-const devToken = process.argv.includes('--dev-token')
+const dev = process.argv.includes('--dev');
+const devToken = dev
   ? readFileSync(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'practicum-mcp/token'), 'utf8').trim()
   : '';
 
@@ -31,7 +33,7 @@ const ctx = await esbuild.context({
   format: 'iife',
   target: 'firefox128',
   sourcemap: 'inline',
-  define: { __DEV_TOKEN__: JSON.stringify(devToken) },
+  define: { __DEV_TOKEN__: JSON.stringify(devToken), __DEV__: String(dev) },
   logLevel: 'info',
 });
 if (watch) await ctx.watch();

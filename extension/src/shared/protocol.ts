@@ -1,3 +1,5 @@
+import type { HudState } from './hud';
+
 /** Why a call failed, so the model can decide whether to retry. */
 export type ErrorKind =
   | 'tool' // bad arguments, element missing, unexpected page state
@@ -43,4 +45,5 @@ export interface StatusReply {
   status: LinkStatus;
   detail: string;
   tools: number;
+  hud: HudState;
 }

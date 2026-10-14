@@ -1,4 +1,4 @@
-/** Set by `build.mjs --dev-token` for test installs; empty in normal builds. */
+/** Set by `build.mjs --dev` for test installs; empty in normal builds. */
 declare const __DEV_TOKEN__: string;
 
 export interface Settings {

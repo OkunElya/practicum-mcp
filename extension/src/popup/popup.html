@@ -16,6 +16,11 @@
     .row label { margin: 0; color: inherit; }
     .buttons { display: flex; gap: 6px; margin-top: 12px; }
     button { flex: 1; padding: 5px; }
+    #stop { color: var(--bad); font-weight: 600; }
+    #current { margin: 10px 0 4px; font-weight: 600; }
+    #log { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow: auto; color: var(--muted); }
+    #log li { overflow-wrap: anywhere; }
+    #log .error { color: var(--bad); } #log .ok { color: var(--ok); }
   </style>
 </head>
 <body>
@@ -33,6 +38,9 @@
     <button id="save">Save &amp; connect</button>
     <button id="reconnect">Reconnect</button>
   </div>
+  <div id="current"></div>
+  <ol id="log"></ol>
+  <div class="buttons"><button id="stop">Stop all actions</button></div>
   <script src="popup.js"></script>
 </body>
 </html>

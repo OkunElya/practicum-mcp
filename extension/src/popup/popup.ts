@@ -1,3 +1,4 @@
+import type { HudRequest } from '../shared/hud';
 import type { PopupRequest, StatusReply } from '../shared/protocol';
 import { loadSettings, type Settings } from '../background/settings';
 
@@ -20,6 +21,15 @@ async function refresh(): Promise<void> {
   const s: StatusReply = await browser.runtime.sendMessage(req);
   status.className = s.status;
   status.textContent = `${STATUS_TEXT[s.status]}${s.detail ? ` · ${s.detail}` : ''} · ${s.tools} tools`;
+  $('current').textContent = s.hud.current ? `▶ ${s.hud.current}${s.hud.queued ? ` (+${s.hud.queued} queued)` : ''}` : 'Idle';
+  $('log').replaceChildren(
+    ...s.hud.entries.map((e) => {
+      const li = document.createElement('li');
+      li.className = e.level;
+      li.textContent = `${new Date(e.t).toLocaleTimeString()} ${e.text}`;
+      return li;
+    }),
+  );
 }
 
 loadSettings().then((s) => {
@@ -31,6 +41,10 @@ loadSettings().then((s) => {
 $('save').addEventListener('click', async () => {
   const s: Settings = { bridgeUrl: url.value.trim(), token: token.value.trim(), confirmIrreversible: confirm.checked };
   await browser.storage.local.set(s as any); // background reconnects on change
+  setTimeout(refresh, 300);
+});
+$('stop').addEventListener('click', async () => {
+  await browser.runtime.sendMessage({ target: 'background', type: 'stop' } satisfies HudRequest);
   setTimeout(refresh, 300);
 });
 $('reconnect').addEventListener('click', async () => {
