@@ -13,20 +13,26 @@ The same loop also drives a local model through Ollama (`practicum-local-agent`)
 the conversation is kept here, so nothing has to be repeated after a page change,
 and the local model may consult Практикум ИИ through ask_platform_ai.
 
+A Session keeps one conversation open across several user messages; the
+one-shot commands below send a single task, `practicum-chat` (chat.py) is the
+interactive front end.
+
     uv run practicum-platform-agent "Пройди текущий урок …" [--rounds 10]
     uv run practicum-local-agent --model gpt-oss-32k "Пройди текущий урок …"
 """
 
 import argparse
 import asyncio
+import http.client
 import json
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 import urllib.error
 import urllib.request
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from pathlib import Path
 
 from mcp.client import Client
@@ -140,7 +146,20 @@ def clip(s: str, n: int = MAX_RESULT_CHARS) -> str:
     return s[:n] + f"\n…(обрезано, ещё {len(s) - n} символов; для read_lesson используй offset из подсказки в тексте или blocks=true)"
 
 
+def clean_args(args) -> dict:
+    """gpt-oss sends {"": ""} for tools without parameters; drop keys the schema can't have."""
+    if not isinstance(args, dict):
+        return {}
+    return {k: v for k, v in args.items() if isinstance(k, str) and k.strip()}
+
+
+def text_of(result) -> str:
+    return "\n".join(getattr(x, "text", "") for x in result.content)
+
+
 Note = Callable[[str, str], None]
+Stream = Callable[[str, str], None]  # (kind, chunk) for tokens as they arrive; not logged
+INTERRUPTED = "прервано пользователем"
 
 NATIVE_RULES = """\
 Ты управляешь платформой Яндекс Практикума в браузере пользователя через инструменты (tools). \
@@ -180,19 +199,30 @@ class PlatformBackend:
 
     def __init__(self, client: Client, note: Note, keep_chat: bool = False):
         self.client, self.note, self.keep_chat = client, note, keep_chat
-        self.intro = ""
         self.full: Callable[[str], str] = lambda r: r
         self.message = ""
+        self.fresh = True  # the chat on the server hasn't seen the protocol yet
 
-    async def start(self, tools, task: str, full: Callable[[str], str]) -> bool:
-        self.intro, self.full = INTRO.format(tools=tool_lines(tools, self.hidden), task=task), full
-        self.message = self.intro
+    async def start(self, tools, full: Callable[[str], str]) -> bool:
+        self.full = full
         if self.keep_chat:
             return True
+        return await self.reset()
+
+    async def reset(self) -> bool:
         # A fresh chat, so earlier conversations in this lesson don't steer the model.
         r = await self.client.call_tool("reset_platform_ai_chat", {})
-        self.note("reset chat", "\n".join(getattr(x, "text", "") for x in r.content))
+        self.note("reset chat", text_of(r))
+        self.fresh = True
         return not r.is_error
+
+    def user(self, text: str, page_changed: bool) -> None:
+        if self.fresh or page_changed:
+            # full() carries the protocol, the (new) task and the log of what was done.
+            self.message = self.full("")
+            self.fresh = False
+        else:
+            self.message = f"Новое сообщение от пользователя:\n{text}\n\nОтвечай как раньше: CALL-строки или ANSWER: ..."
 
     async def turn(self) -> Turn | None:
         message = self.message
@@ -215,10 +245,10 @@ class PlatformBackend:
             else:
                 # Continuing this chat keeps failing (stream/message answers "500" in a 200);
                 # a new chat goes through ask_in_lesson, so start one with a self-contained message.
-                r = await self.client.call_tool("reset_platform_ai_chat", {})
-                self.note("Практикум ИИ still unavailable → new chat", "\n".join(getattr(x, "text", "") for x in r.content))
-                if r.is_error:
+                self.note("Практикум ИИ still unavailable", "starting a new chat")
+                if not await self.reset():
                     return None
+                self.fresh = False
                 message = "Чат пришлось начать заново.\n\n" + self.full(message)
                 self.note("resend (new chat)", message)
         return None
@@ -246,56 +276,127 @@ class OllamaBackend:
 
     (gpt-oss routes text-protocol "CALL {…}" lines into its tool channel, which Ollama
     then fails to parse with a 500, so local models get real function definitions.)
+    With `stream`, tokens are shown as they arrive.
     """
 
     hidden = {"reset_platform_ai_chat"}  # it may consult Практикум ИИ via ask_platform_ai
     KEEP_FULL = 8  # most recent messages sent in full; older tool results are shortened
+    SQUEEZE_AT = 0.75  # share of the context window after which older messages are cut harder
 
-    def __init__(self, note: Note, model: str, base_url: str, num_ctx: int | None, temperature: float, think: str | None = None):
-        self.note, self.model, self.base_url, self.think = note, model, base_url.rstrip("/"), think
+    def __init__(
+        self,
+        note: Note,
+        model: str,
+        base_url: str,
+        num_ctx: int | None,
+        temperature: float,
+        think: str | None = None,
+        stream: Stream | None = None,
+    ):
+        self.note, self.base_url, self.think, self.stream = note, base_url.rstrip("/"), think, stream
         self.options: dict = {"temperature": temperature}
         if num_ctx:
             self.options["num_ctx"] = num_ctx
-        self.name = model
+        self.model = self.name = model
+        self.ctx: int | None = num_ctx  # context window, for the squeeze and the token readout
+        self.prompt_tokens = 0
         self.messages: list[dict] = []
         self.tools: list[dict] = []
         # Talk to Ollama directly: the system proxy must not see loopback traffic.
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self._abort = threading.Event()  # set when the user interrupts a streaming reply
 
-    async def start(self, tools, task: str, full: Callable[[str], str]) -> bool:
+    def _request(self, path: str, payload: dict, timeout: float):
+        req = urllib.request.Request(f"{self.base_url}{path}", data=json.dumps(payload).encode(), headers={"content-type": "application/json"})
+        return self.opener.open(req, timeout=timeout)
+
+    def _model_ctx(self) -> int | None:
+        if n := self.options.get("num_ctx"):
+            return n
+        try:
+            with self._request("/api/show", {"model": self.model}, 10) as r:
+                params = json.loads(r.read()).get("parameters") or ""
+        except (OSError, ValueError):
+            return None
+        m = re.search(r"^num_ctx\s+(\d+)", params, re.M)
+        return int(m.group(1)) if m else None
+
+    async def set_model(self, model: str) -> None:
+        self.model = self.name = model
+        self.ctx = await asyncio.to_thread(self._model_ctx)
+
+    async def start(self, tools, full: Callable[[str], str]) -> bool:
         self.tools = [
             {"type": "function", "function": {"name": t.name, "description": t.description or "", "parameters": t.input_schema or {"type": "object", "properties": {}}}}
             for t in tools
             if visible(t.name, self.hidden)
         ]
-        self.messages = [{"role": "system", "content": NATIVE_RULES}, {"role": "user", "content": f"Задача: {task}"}]
-        self.note(f"to {self.name}", f"{len(self.tools)} tools\n{NATIVE_RULES}\n\nЗадача: {task}")
+        self.ctx = await asyncio.to_thread(self._model_ctx)
+        self.messages = [{"role": "system", "content": NATIVE_RULES}]
+        self.note(f"to {self.name}", f"{len(self.tools)} tools, context {self.ctx or '?'}\n{NATIVE_RULES}")
         return True
 
+    async def reset(self) -> bool:
+        self.messages = self.messages[:1]
+        self.prompt_tokens = 0
+        return True
+
+    def user(self, text: str, page_changed: bool) -> None:
+        self.messages.append({"role": "user", "content": text})
+
     def _view(self) -> list[dict]:
+        squeeze = bool(self.ctx) and self.prompt_tokens > self.SQUEEZE_AT * self.ctx
+        limit = 200 if squeeze else 600
         out = []
         cut = len(self.messages) - self.KEEP_FULL
         for i, m in enumerate(self.messages):
-            if 1 < i < cut and m["role"] == "tool" and len(m["content"]) > 600:
-                m = {**m, "content": m["content"][:600] + "\n…(старый результат сокращён)"}
+            if 0 < i < cut and m["role"] in ("tool", "assistant") and len(m["content"]) > limit:
+                if m["role"] == "tool" or squeeze:
+                    m = {**m, "content": m["content"][:limit] + "\n…(старое сообщение сокращено)"}
             out.append(m)
         return out
 
     def _post(self) -> dict:
-        payload = {"model": self.model, "messages": self._view(), "tools": self.tools, "stream": False, "options": self.options}
+        payload = {"model": self.model, "messages": self._view(), "tools": self.tools, "stream": self.stream is not None, "options": self.options}
         if self.think:
-            payload["think"] = self.think  # gpt-oss: reasoning effort low/medium/high
-        req = urllib.request.Request(f"{self.base_url}/api/chat", data=json.dumps(payload).encode(), headers={"content-type": "application/json"})
-        with self.opener.open(req, timeout=900) as r:
-            return json.loads(r.read())
+            # gpt-oss: reasoning effort low/medium/high; "off" for models that can skip it.
+            payload["think"] = False if self.think == "off" else self.think
+        with self._request("/api/chat", payload, 900) as r:
+            if self.stream is None:
+                return json.loads(r.read())
+            content, thinking, calls, last = [], [], [], {}
+            for line in r:
+                if self._abort.is_set():
+                    break
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise ValueError(chunk["error"])
+                m = chunk.get("message") or {}
+                if t := m.get("thinking"):
+                    thinking.append(t)
+                    self.stream(f"{self.name} thinking", t)
+                if c := m.get("content"):
+                    content.append(c)
+                    self.stream(self.name, c)
+                calls += m.get("tool_calls") or []
+                if chunk.get("done"):
+                    last = chunk
+                    break
+            return {**last, "message": {"role": "assistant", "content": "".join(content), "thinking": "".join(thinking), "tool_calls": calls}}
 
     async def turn(self) -> Turn | None:
         data = None
+        self._abort.clear()
         for attempt in (1, 2, 3):
             try:
                 data = await asyncio.to_thread(self._post)
                 break
-            except (urllib.error.URLError, TimeoutError, ValueError) as e:
+            except asyncio.CancelledError:
+                self._abort.set()  # the reading thread stops at the next chunk
+                raise
+            except (OSError, http.client.HTTPException, ValueError) as e:
                 body = ""
                 if isinstance(e, urllib.error.HTTPError):
                     try:
@@ -315,7 +416,11 @@ class OllamaBackend:
         content = (msg.get("content") or "").strip()
         raw_calls = msg.get("tool_calls") or []
         self.messages.append({"role": "assistant", "content": content, **({"tool_calls": raw_calls} if raw_calls else {})})
-        self.note("tokens", f"prompt {data.get('prompt_eval_count')}, reply {data.get('eval_count')}")
+        was_squeezed = bool(self.ctx) and self.prompt_tokens > self.SQUEEZE_AT * self.ctx
+        self.prompt_tokens = data.get("prompt_eval_count") or self.prompt_tokens
+        self.note("tokens", f"prompt {self.prompt_tokens}{f'/{self.ctx}' if self.ctx else ''}, reply {data.get('eval_count')}")
+        if self.ctx and self.prompt_tokens > self.SQUEEZE_AT * self.ctx and not was_squeezed:
+            self.note("warning", f"context {self.prompt_tokens * 100 // self.ctx}% full: older messages are cut harder from now on; /clear starts over")
         calls = []
         for c in raw_calls:
             fn = c.get("function") or {}
@@ -325,7 +430,7 @@ class OllamaBackend:
                     args = json.loads(args)
                 except ValueError:
                     args = {}
-            calls.append({"tool": str(fn.get("name", "")), "args": args})
+            calls.append({"tool": str(fn.get("name", "")), "args": clean_args(args)})
         self.note(self.name, "\n".join(f"CALL {json.dumps(c, ensure_ascii=False)}" for c in calls) or content or "(empty)")
         answer = None if calls else (re.sub(r"^\s*ANSWER:\s*", "", content) or None)
         return Turn(calls, answer, [])
@@ -341,8 +446,162 @@ class OllamaBackend:
             self.messages.append({"role": "tool", "tool_name": e.call["tool"], "content": content})
 
 
-async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Callable[[Client, Note], object]) -> int:
-    drop_proxies_for_loopback(url)
+@dataclass
+class Outcome:
+    code: int  # 0 answered, 1 the model or the bridge failed, 2 round limit, 3 stopped after failed checks
+    answer: str | None = None
+
+
+class Session:
+    """One conversation with a model over the bridge's tools.
+
+    Each user message runs the agent loop until the model answers in text (or a
+    limit stops it); the conversation, the log of executed calls and the page
+    tracking carry over to the next message.
+    """
+
+    def __init__(self, client: Client, backend, note: Note):
+        self.client, self.backend, self.note = client, backend, note
+        self.tools: list = []
+        self.known: set[str] = set()
+        self.read_only: set[str] = set()
+        self.history: list[str] = []  # one line per executed call, for self-contained messages
+        self.task = ""
+        self.where = ""
+        self.failed_checks: dict[tuple, int] = {}
+        self.by_user: list[str] = []  # calls the user made by hand, reported with the next message
+
+    async def open(self) -> bool:
+        self.tools = (await self.client.list_tools()).tools
+        self.known = {t.name for t in self.tools if visible(t.name, self.backend.hidden)}
+        self.read_only = {t.name for t in self.tools if t.annotations and t.annotations.read_only_hint}
+        self.where = await self.page()
+        return await self.backend.start(self.tools, self.full)
+
+    async def page(self) -> str:
+        r = await self.client.call_tool("where_am_i", {})
+        text = text_of(r)
+        return next((l for l in text.splitlines() if l.startswith("URL:")), text[:200])
+
+    def full(self, results: str = "") -> str:
+        # For a model without memory of this conversation (the platform chat after a
+        # page change, or a lost thread): protocol, task, log of what was done, results.
+        intro = INTRO.format(tools=tool_lines(self.tools, self.backend.hidden), task=self.task)
+        done = "\n\nУже сделано:\n" + "\n".join(self.history[-15:]) if self.history else ""
+        latest = f"\n\nРезультаты последних вызовов:\n\n{results}" if results else ""
+        return intro + done + latest + "\n\nПродолжай: CALL-строки или ANSWER: ..."
+
+    async def call(self, tool: str, args: dict) -> tuple[str, bool]:
+        r = await self.client.call_tool(tool, clean_args(args))
+        return text_of(r), bool(r.is_error)
+
+    async def user_call(self, tool: str, args: dict) -> tuple[str, bool]:
+        """A call the user makes by hand; the model hears about it with the next message."""
+        out, err = await self.call(tool, args)
+        sig = f"{tool}({json.dumps(clean_args(args), ensure_ascii=False)})"
+        self.history.append(f"- {sig} → {short(out)} (вызвал пользователь)")
+        self.by_user.append(f"{sig} {'→ ОШИБКА' if err else '→'}\n{clip(out, 3000)}")
+        return out, err
+
+    async def reset(self) -> bool:
+        self.history.clear()
+        self.by_user.clear()
+        self.failed_checks.clear()
+        self.task = ""
+        return await self.backend.reset()
+
+    async def ask(self, text: str, rounds: int) -> Outcome:
+        now = await self.page()
+        changed = now != self.where
+        if changed:
+            self.note("page changed", f"{self.where}\n→ {now}")
+            self.where = now
+        if self.by_user:
+            text = "Я сам выполнил вызовы:\n\n" + "\n\n".join(self.by_user) + "\n\n" + text
+            self.by_user = []
+        if changed:
+            text += f"\n\n(Сейчас открыта другая страница: {now})"
+        self.task = text
+        self.failed_checks.clear()  # a new message from the user lifts the failed-check stop
+        self.backend.user(text, changed)
+        return await self.resume(rounds)
+
+    async def resume(self, rounds: int) -> Outcome:
+        for rnd in range(1, rounds + 1):
+            self.note("round", str(rnd))
+            turn = await self.backend.turn()
+            if turn is None:
+                return Outcome(1)
+            if not turn.calls:
+                if turn.answer is not None:
+                    self.note("done", turn.answer)
+                    return Outcome(0, turn.answer)
+                self.note("off format", "asking again")
+                self.backend.off_format()
+                continue
+            if await self._execute(turn):
+                return Outcome(3)
+        self.note("stopped", f"round limit ({rounds}) reached")
+        return Outcome(2)
+
+    async def _execute(self, turn: Turn) -> bool:
+        """Run one turn's calls and report the results to the backend; True when the driver must stop."""
+        done: list[Executed] = []
+        changed = None
+        stop_reason = None
+        halted = False
+        try:
+            for c in turn.calls:
+                c = {"tool": c["tool"], "args": clean_args(c["args"])}
+                if stop_reason:
+                    # Later calls were planned without the result: at most one action per round.
+                    done.append(Executed(c, "", False, stop_reason))
+                    continue
+                if c["tool"] not in self.known:
+                    out, err = f"инструмент {c['tool']!r} недоступен", True
+                else:
+                    try:
+                        out, err = await self.call(c["tool"], c["args"])
+                    except asyncio.CancelledError:
+                        done.append(Executed(c, "", True, INTERRUPTED + " (результат неизвестен)"))
+                        raise
+                sig = f"{c['tool']}({json.dumps(c['args'], ensure_ascii=False)})"
+                self.note(f"{sig}{' ERROR' if err else ''}", out)
+                done.append(Executed(c, out, err))
+                self.history.append(f"- {sig} → {short(out)}")
+                if c["tool"] in CHECK_TOOLS and not err:
+                    key = (c["tool"], self.where, json.dumps(c["args"], sort_keys=True))
+                    self.failed_checks[key] = 0 if out.startswith("Solved") else self.failed_checks.get(key, 0) + 1
+                    if self.failed_checks[key] >= MAX_FAILED_CHECKS:
+                        self.note("stopped", f"{MAX_FAILED_CHECKS} failed checks in a row on this task; handing back to the user")
+                        halted = True
+                        stop_reason = f"проверка не прошла {MAX_FAILED_CHECKS} раза подряд; решение за пользователем"
+                        continue
+                acted = c["tool"] not in self.read_only
+                if not err and acted and (now := await self.page()) != self.where:
+                    changed = now
+                if err:
+                    stop_reason = "предыдущий вызов завершился ошибкой; посмотри результат и реши заново"
+                elif acted:
+                    stop_reason = "за один ответ выполняется только одно действие; посмотри результат и реши заново"
+        except asyncio.CancelledError:
+            # Keep the conversation well-formed: every planned call gets a result.
+            for c in turn.calls[len(done):]:
+                done.append(Executed(c, "", False, INTERRUPTED))
+            self.backend.results(done, turn.bad, False)
+            raise
+
+        now = changed or await self.page()
+        page_changed = now != self.where
+        if page_changed:
+            self.note("page changed", f"{self.where}\n→ {now}")
+            self.where = now
+        self.backend.results(done, turn.bad, page_changed)
+        return halted
+
+
+def log_note(log_path: Path) -> Note:
+    """Print every event in full and append it to the log."""
     log = log_path.open("a", encoding="utf-8")
 
     def note(kind: str, text: str) -> None:
@@ -351,87 +610,21 @@ async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Ca
         log.write(f"\n[{stamp}] ── {kind} ──\n{text}\n")
         log.flush()
 
+    return note
+
+
+async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Callable[[Client, Note], object]) -> int:
+    drop_proxies_for_loopback(url)
+    note = log_note(log_path)
     async with Client(url) as client:
-        backend = make_backend(client, note)
-        tools = (await client.list_tools()).tools
-        known = {t.name for t in tools if visible(t.name, backend.hidden)}
-        read_only = {t.name for t in tools if t.annotations and t.annotations.read_only_hint}
-        history: list[str] = []  # one line per executed call, for self-contained messages
-        intro = INTRO.format(tools=tool_lines(tools, backend.hidden), task=task)
-
-        async def page() -> str:
-            r = await client.call_tool("where_am_i", {})
-            text = "\n".join(getattr(x, "text", "") for x in r.content)
-            return next((l for l in text.splitlines() if l.startswith("URL:")), text[:200])
-
-        def full(results: str = "") -> str:
-            # For a model without memory of this conversation (the platform chat after a
-            # page change, or a lost thread): protocol, task, log of what was done, results.
-            done = "\n\nУже сделано:\n" + "\n".join(history[-15:]) if history else ""
-            latest = f"\n\nРезультаты последних вызовов:\n\n{results}" if results else ""
-            return intro + done + latest + "\n\nПродолжай: CALL-строки или ANSWER: ..."
-
-        if not await backend.start(tools, task, full):
+        session = Session(client, make_backend(client, note), note)
+        if not await session.open():
             return 1
-        where = await page()
-        failed_checks: dict[tuple, int] = {}
-
-        for rnd in range(1, rounds + 1):
-            note("round", str(rnd))
-            turn = await backend.turn()
-            if turn is None:
-                return 1
-            if not turn.calls:
-                if turn.answer is not None:
-                    note("done", turn.answer)
-                    # The model's summary can be wrong; log what the page actually says.
-                    r = await client.call_tool("where_am_i", {})
-                    note("actual state", "\n".join(getattr(x, "text", "") for x in r.content))
-                    return 0
-                note("off format", "asking again")
-                backend.off_format()
-                continue
-
-            done: list[Executed] = []
-            changed = None
-            stop_reason = None
-            for c in turn.calls:
-                if stop_reason:
-                    # Later calls were planned without the result: at most one action per round.
-                    done.append(Executed(c, "", False, stop_reason))
-                    continue
-                if c["tool"] not in known:
-                    out, err = f"инструмент {c['tool']!r} недоступен", True
-                else:
-                    r = await client.call_tool(c["tool"], c["args"])
-                    out = "\n".join(getattr(x, "text", "") for x in r.content)
-                    err = bool(r.is_error)
-                note(f"{c['tool']}({json.dumps(c['args'], ensure_ascii=False)}){' ERROR' if err else ''}", out)
-                done.append(Executed(c, out, err))
-                if c["tool"] in CHECK_TOOLS and not err:
-                    key = (c["tool"], where, json.dumps(c["args"], sort_keys=True))
-                    failed_checks[key] = 0 if out.startswith("Solved") else failed_checks.get(key, 0) + 1
-                    if failed_checks[key] >= MAX_FAILED_CHECKS:
-                        note("stopped", f"{MAX_FAILED_CHECKS} failed checks in a row on this task; handing back to the user")
-                        return 3
-                history.append(f"- {c['tool']}({json.dumps(c['args'], ensure_ascii=False)}) → {short(out)}")
-                acted = c["tool"] not in read_only
-                if not err and acted and (now := await page()) != where:
-                    changed = now
-                if err:
-                    stop_reason = "предыдущий вызов завершился ошибкой; посмотри результат и реши заново"
-                elif acted:
-                    stop_reason = "за один ответ выполняется только одно действие; посмотри результат и реши заново"
-
-            now = changed or await page()
-            page_changed = now != where
-            if page_changed:
-                note("page changed", f"{where}\n→ {now}")
-                where = now
-            backend.results(done, turn.bad, page_changed)
-
-        note("stopped", f"round limit ({rounds}) reached")
-        return 2
+        out = await session.ask(task, rounds)
+        if out.code == 0:
+            # The model's summary can be wrong; log what the page actually says.
+            note("actual state", text_of(await client.call_tool("where_am_i", {})))
+        return out.code
 
 
 def _common(p: argparse.ArgumentParser) -> None:

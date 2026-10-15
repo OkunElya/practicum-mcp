@@ -9,5 +9,8 @@ __pycache__/
 scripts/inspect/*.png
 scripts/inspect/net-watch-last.json
 
+# agent and chat logs (page content from the account)
+*.log
+
 # packaged extension
 extension/*.xpi

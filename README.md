@@ -1,4 +1,4 @@
-# Practicum MCP
+can you # Practicum MCP
 
 Lets an MCP client (Claude Code, a small local LLM agent, …) study on
 [Yandex Practicum](https://practicum.yandex.ru) in **your own logged-in browser tab**:
@@ -91,6 +91,24 @@ instructions.
 same loop with a local model through Ollama's `/api/chat`; the conversation is kept by the driver,
 and the model may consult Практикум ИИ via `ask_platform_ai`. Ollama's default context is 4k, which
 cuts off the tool list: use a variant from [`models/`](models/) or `--num-ctx 32768`.
+
+## Chatting with the agent
+
+`uv run --directory bridge practicum-chat --model gpt-oss-32k [--think low]` (or `--platform` for
+Практикум ИИ) opens an interactive chat over the same loop. Each message runs the agent until the
+model answers in text, and the conversation carries over to the next message. Tool calls show as
+short `▸ tool(args)` lines with clipped results, and local models stream their replies. The full
+record goes to `chat.log`.
+
+- **Ctrl+C** stops the current run; a running tool is cancelled in the browser too.
+- **Ctrl+D** or `/quit` exits.
+- `/call TOOL {json}` runs a tool yourself; the model hears about it with your next message.
+- `/continue` lets the model go on after the round limit.
+- `/clear` starts over.
+- `/help` lists the rest: `/where`, `/tools`, `/rounds`, `/verbose`, `/model`, `/think`, `/temp`.
+
+A new message lifts the stop after repeated failed checks. Once a local model's context is 75%
+full, older messages are cut harder; the token readout shows `prompt N/context`.
 
 ## Installing the extension permanently
 
