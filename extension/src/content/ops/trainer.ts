@@ -150,7 +150,12 @@ export async function openFile(file: string): Promise<any> {
     const prefix = segments.slice(0, i).join('/');
     const isFile = i === segments.length;
     if (!isFile && treeNames().some((n) => n.path.startsWith(`${prefix}/`))) continue; // folder already open
-    const node = treeNames().find((n) => n.path === prefix);
+    // After switching tasks the tree re-renders a moment later, so wait for the node.
+    let node = treeNames().find((n) => n.path === prefix);
+    for (let i = 0; !node && i < 40; i++) {
+      await sleep(200);
+      node = treeNames().find((n) => n.path === prefix);
+    }
     if (!node) throw new ToolError(`"${prefix}" is not in the project's file tree`);
     await press(node.el, isFile ? `open ${want}` : `${prefix}/`);
     await sleep(400);

@@ -38,6 +38,9 @@ SELF = "ask_platform_ai"
 HIDDEN = {SELF, "reset_platform_ai_chat"}
 MAX_RESULT_CHARS = 9000
 ASK_RETRIES = 3
+# Failed checks in a row on one task before the driver stops (each check is a recorded attempt).
+MAX_FAILED_CHECKS = 3
+CHECK_TOOLS = {"check_task", "check_code_exercise"}
 ASK_RETRY_WAIT_S = 70
 CALL_RE = re.compile(r"^\s*CALL\s+(\{.*\})\s*$")
 ANSWER_RE = re.compile(r"^\s*ANSWER:\s*(.*)$", re.S)
@@ -371,6 +374,7 @@ async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Ca
         if not await backend.start(tools, task, full):
             return 1
         where = await page()
+        failed_checks: dict[tuple, int] = {}
 
         for rnd in range(1, rounds + 1):
             note("round", str(rnd))
@@ -380,6 +384,9 @@ async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Ca
             if not turn.calls:
                 if turn.answer is not None:
                     note("done", turn.answer)
+                    # The model's summary can be wrong; log what the page actually says.
+                    r = await client.call_tool("where_am_i", {})
+                    note("actual state", "\n".join(getattr(x, "text", "") for x in r.content))
                     return 0
                 note("off format", "asking again")
                 backend.off_format()
@@ -401,6 +408,12 @@ async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Ca
                     err = bool(r.is_error)
                 note(f"{c['tool']}({json.dumps(c['args'], ensure_ascii=False)}){' ERROR' if err else ''}", out)
                 done.append(Executed(c, out, err))
+                if c["tool"] in CHECK_TOOLS and not err:
+                    key = (c["tool"], where, json.dumps(c["args"], sort_keys=True))
+                    failed_checks[key] = 0 if out.startswith("Solved") else failed_checks.get(key, 0) + 1
+                    if failed_checks[key] >= MAX_FAILED_CHECKS:
+                        note("stopped", f"{MAX_FAILED_CHECKS} failed checks in a row on this task; handing back to the user")
+                        return 3
                 history.append(f"- {c['tool']}({json.dumps(c['args'], ensure_ascii=False)}) → {short(out)}")
                 acted = c["tool"] not in read_only
                 if not err and acted and (now := await page()) != where:

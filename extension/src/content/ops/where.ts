@@ -1,4 +1,4 @@
-import { byTestId, isVisible, plain, state, text } from '../page';
+import { byTestId, isVisible, pageWindow, plain, state, text } from '../page';
 import { theoryOpen } from './trainer';
 
 export type PageKind = 'profile' | 'lesson' | 'trainer' | 'other';
@@ -48,6 +48,18 @@ const TEST_ID_CONTROLS = [
   'sidebar-gpt-button',
   'sidebar-home-button',
 ];
+
+function taskEditorReady(s: any): boolean {
+  if (!document.querySelector('.monaco-editor')) return false;
+  const task = s?.trainerReducer?.task;
+  const taskId = location.pathname.match(/\/task\/([^/]+)/)?.[1];
+  if (!task?.id || task.id !== taskId) return false;
+  const panes: any[] = task.panes ? Array.from(task.panes) : [];
+  if (!panes.length) return true; // single-file tasks: the editor is enough
+  const models: any[] = pageWindow().monaco?.editor ? Array.from(pageWindow().monaco.editor.getModels()) : [];
+  const names = new Set(panes.map((p) => String(p.name)));
+  return models.some((m) => names.has(String(m.uri.path).replace(/^\//, '')));
+}
 
 export function where(): WhereInfo {
   const path = location.pathname;
@@ -113,9 +125,10 @@ export function where(): WhereInfo {
       kind === 'lesson'
         ? !!document.querySelector('[class*="theory-viewer__block"]')
         : kind === 'trainer'
-          ? // a task is ready once its editor exists (it loads a while after the theory window)
+          ? // a task is ready once its editor shows one of *this* task's files: switching tasks
+            // is an in-page navigation and the previous task's editor lingers for a moment
             path.includes('/task/')
-            ? !!document.querySelector('.monaco-editor')
+            ? taskEditorReady(s)
             : !!document.querySelector('[class*="theory-viewer__block"]')
           : kind === 'profile'
             ? !!document.querySelector('.course-card')
