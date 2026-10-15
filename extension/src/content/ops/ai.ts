@@ -14,6 +14,28 @@ export interface AiState {
   count: number;
   last: { type: string; streaming: boolean; text: string } | null;
   suggestions: string[];
+  /** A visible error notice such as «Сервис временно недоступен. Попробуйте ещё раз через минуту.» */
+  error: string;
+}
+
+const ERROR_TEXT = /временно недоступен|попробуйте (ещё|еще) раз/i;
+
+/**
+ * The site's error toast (`.Toastify__toast--error .prisma-toast__text`), e.g. after
+ * `POST /api/gpt/stream/message/` answers 200 with a "500 Internal Server Error"
+ * body; the chat then rolls the message back and shows «Сервис временно недоступен…».
+ */
+function visibleError(): string {
+  const toasts = [...document.querySelectorAll<HTMLElement>('.Toastify__toast--error')].filter(isVisible);
+  const texts = toasts.map((t) => (t.querySelector('.prisma-toast__text') ?? t).textContent ?? '');
+  if (!texts.length) {
+    // fallback in case the toast markup changes
+    const hits = [...document.querySelectorAll<HTMLElement>('body *')].filter(
+      (e) => e.childElementCount < 6 && ERROR_TEXT.test(e.textContent ?? '') && isVisible(e) && !e.closest('practicum-mcp-hud'),
+    );
+    texts.push(...hits.filter((e) => !hits.some((o) => o !== e && e.contains(o))).map((e) => e.textContent ?? ''));
+  }
+  return texts.map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' | ').slice(0, 300);
 }
 
 export function aiState(): AiState {
@@ -29,6 +51,7 @@ export function aiState(): AiState {
     count: messages.length,
     last: last ? { type: String(last.type), streaming: !!last.isStreaming, text: String(last.text ?? '') } : null,
     suggestions: c?.suggestions ? Array.from(c.suggestions as any[], (s) => String(s.text ?? '')) : [],
+    error: visibleError(),
   };
 }
 

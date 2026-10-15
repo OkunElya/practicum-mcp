@@ -41,7 +41,8 @@ async function ask(question: string, initial: AiState, ctx: ToolContext): Promis
   if (!s.open) throw new ToolError('could not open the AI chat');
   await sleep(500, ctx.signal);
 
-  const before = (await st()).count;
+  const start = await st();
+  const before = start.count;
   await ctx.page.op('aiSend', { question });
   ctx.step('sent; waiting for the answer');
 
@@ -50,6 +51,8 @@ async function ask(question: string, initial: AiState, ctx: ToolContext): Promis
     'the AI answer',
     async () => {
       const now = await st();
+      // The site refuses now and then («Сервис временно недоступен…»): stop waiting and report it.
+      if (now.error && now.error !== start.error) return now;
       const answer = now.count > before && now.last?.type === 'ai' ? now.last : null;
       if (answer?.streaming && answer.text.length - reported > 400) {
         reported = answer.text.length;
@@ -60,6 +63,9 @@ async function ask(question: string, initial: AiState, ctx: ToolContext): Promis
     ANSWER_TIMEOUT_MS,
     800,
   );
+  if (done.error && done.error !== start.error && !(done.count > before && done.last?.type === 'ai')) {
+    throw new ToolError(`Практикум ИИ refused: ${done.error}`, 'platform');
+  }
   // Suggestions arrive a few seconds after the answer; wait briefly for them.
   const withSuggestions = await ctx.page.waitFor('suggestions', async () => {
     const now = await st();

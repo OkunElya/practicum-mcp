@@ -28,6 +28,8 @@ SELF = "ask_platform_ai"
 # Driver-only tools the model must not see or call.
 HIDDEN = {SELF, "reset_platform_ai_chat"}
 MAX_RESULT_CHARS = 9000
+ASK_RETRIES = 3
+ASK_RETRY_WAIT_S = 70
 CALL_RE = re.compile(r"^\s*CALL\s+(\{.*\})\s*$")
 ANSWER_RE = re.compile(r"^\s*ANSWER:\s*(.*)$", re.S)
 
@@ -162,11 +164,28 @@ async def run(task: str, rounds: int, url: str, log_path: Path, keep_chat: bool 
         message = intro
         for rnd in range(1, rounds + 1):
             note(f"to Практикум ИИ (round {rnd})", message)
-            res = await client.call_tool(SELF, {"question": message})
-            text = "\n".join(getattr(c, "text", "") for c in res.content)
-            if res.is_error:
-                note("ask_platform_ai failed", text)
-                return 1
+            for attempt in range(1, ASK_RETRIES + 1):
+                res = await client.call_tool(SELF, {"question": message})
+                text = "\n".join(getattr(c, "text", "") for c in res.content)
+                if not res.is_error:
+                    break
+                if "[platform]" not in text or attempt == ASK_RETRIES:
+                    note("ask_platform_ai failed", text)
+                    return 1
+                if attempt == 1:
+                    # «Сервис временно недоступен…»: wait and resend.
+                    note("Практикум ИИ unavailable", f"{text}\nwaiting {ASK_RETRY_WAIT_S} s, then resending")
+                    await asyncio.sleep(ASK_RETRY_WAIT_S)
+                else:
+                    # Continuing this chat keeps failing (stream/message answers "500" in a 200);
+                    # a new chat goes through ask_in_lesson, so start one with a self-contained message.
+                    r = await client.call_tool("reset_platform_ai_chat", {})
+                    note("Практикум ИИ still unavailable → new chat", "\n".join(getattr(x, "text", "") for x in r.content))
+                    if r.is_error:
+                        return 1
+                    if not message.startswith(intro[:200]):
+                        message = "Чат пришлось начать заново.\n\n" + full(message)
+                    note(f"to Практикум ИИ (round {rnd}, new chat)", message)
             reply = strip_suggestions(text)
             note("Практикум ИИ", reply)
 

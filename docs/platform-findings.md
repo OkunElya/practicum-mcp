@@ -448,6 +448,10 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
   with invented block ids and guessed results; the driver runs at most one action per round and
   stops a batch at the first error. Chatty replies may contain example `CALL`/`ANSWER` lines in code
   fences, which are ignored.
+- The AI chat's continuation endpoint `POST /api/gpt/stream/message/` intermittently fails as
+  HTTP 200 + body "500 Internal Server Error"; the page rolls the message back and shows an error
+  toast «Сервис временно недоступен…». `ask_platform_ai` reports it as `platform` at once; the driver
+  waits 70 s and resends, then starts a new chat (ask_in_lesson) with a self-contained message.
 - `QuizCoding` blocks use CodeMirror 5, not Monaco; a page reload shows the starter code again even
   for solved blocks (the solved attempt stays in `GET …/quizzes/`). Their run backend sometimes
   answers «Request took too long to execute; timeout occured» (no result panel); retrying or
