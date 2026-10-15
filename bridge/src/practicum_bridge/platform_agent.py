@@ -465,6 +465,8 @@ class Session:
         self.failed_checks: dict[tuple, int] = {}
         self.errors: dict[tuple, tuple[str, int]] = {}  # call → (its last error, how many times in a row)
         self.refused = 0  # repeats of a failing call that were not run
+        self.last_read: tuple[tuple, str, int] | None = None  # (call, result, times in a row) of the latest read
+        self.failed_check: tuple | None = None  # the last failed check, until something changes
         self.by_user: list[str] = []  # calls the user made by hand, reported with the next message
         self.page_text = ""  # the last where_am_i, in full
 
@@ -506,6 +508,8 @@ class Session:
         self.failed_checks.clear()
         self.errors.clear()
         self.refused = 0
+        self.last_read = None
+        self.failed_check = None
         self.task = ""
         return await self.backend.reset()
 
@@ -523,6 +527,8 @@ class Session:
         self.failed_checks.clear()
         self.errors.clear()
         self.refused = 0
+        self.last_read = None
+        self.failed_check = None
         self.backend.user(text, changed, self.page_text)
         return await self.resume(rounds)
 
@@ -559,6 +565,17 @@ class Session:
                     continue
                 key = (c["tool"], json.dumps(c["args"], sort_keys=True))
                 last = self.errors.get(key)
+                same = self.last_read if self.last_read and self.last_read[0] == key else None
+                if same and same[2] >= REPEAT_LIMIT:
+                    # The same read with the same result again (get_code 20 times in a tuning run).
+                    self.refused += 1
+                    self.note("repeat refused", f"{c['tool']} already returned the same result {same[2]} times in a row")
+                    done.append(Executed(c, "", True, f"ты уже {same[2]} раза подряд получил этот же результат; он не изменится — действуй на его основе"))
+                    if self.refused >= LOOP_STOP:
+                        self.note("stopped", "the model keeps repeating the same call; handing back to the user")
+                        halted = 4
+                    stop_reason = "предыдущий вызов не выполнен; посмотри результат и реши заново"
+                    continue
                 if last and last[1] >= REPEAT_LIMIT:
                     # Small models retry a failing call verbatim (15 times in the tuning runs).
                     self.refused += 1
@@ -566,6 +583,17 @@ class Session:
                     done.append(Executed(c, "", True, f"этот вызов уже {last[1]} раза подряд завершился ошибкой «{short(last[0], 300)}»; повторять его бесполезно — сделай что-то другое"))
                     if self.refused >= LOOP_STOP:
                         self.note("stopped", "the model keeps repeating a failing call; handing back to the user")
+                        halted = 4
+                    stop_reason = "предыдущий вызов не выполнен; посмотри результат и реши заново"
+                    continue
+                check_key = (c["tool"], self.where, json.dumps(c["args"], sort_keys=True))
+                if c["tool"] in CHECK_TOOLS and self.failed_check == check_key:
+                    # Each check is a recorded attempt: the same code would fail the same way.
+                    self.refused += 1
+                    self.note("repeat refused", f"{c['tool']}: nothing changed since the last failed check")
+                    done.append(Executed(c, "", True, "проверка уже не прошла, а с тех пор ничего не менялось; сначала исправь решение по сообщению проверки"))
+                    if self.refused >= LOOP_STOP:
+                        self.note("stopped", "the model keeps re-checking unchanged code; handing back to the user")
                         halted = 4
                     stop_reason = "предыдущий вызов не выполнен; посмотри результат и реши заново"
                     continue
@@ -581,6 +609,12 @@ class Session:
                 self.note(f"{sig}{' ERROR' if err else ''}", out)
                 done.append(Executed(c, out, err))
                 self.history.append(f"- {sig} → {short(out)}")
+                if not err and c["tool"] in self.read_only:
+                    self.last_read = (key, out, same[2] + 1 if same and same[1] == out else 1)
+                elif not err:
+                    self.last_read = None  # an action: reading again is reasonable
+                    if c["tool"] not in CHECK_TOOLS:
+                        self.failed_check = None  # the code or the page changed: checking again makes sense
                 if err:
                     self.errors[key] = (out, last[1] + 1 if last and last[0] == out else 1)
                 else:
@@ -588,7 +622,8 @@ class Session:
                     if c["tool"] not in self.read_only:
                         self.errors.clear()  # the project or the page changed: earlier failures may not repeat
                 if c["tool"] in CHECK_TOOLS and not err:
-                    key = (c["tool"], self.where, json.dumps(c["args"], sort_keys=True))
+                    key = check_key
+                    self.failed_check = None if out.startswith("Solved") else key
                     self.failed_checks[key] = 0 if out.startswith("Solved") else self.failed_checks.get(key, 0) + 1
                     if self.failed_checks[key] >= MAX_FAILED_CHECKS:
                         self.note("stopped", f"{MAX_FAILED_CHECKS} failed checks in a row on this task; handing back to the user")

@@ -47,6 +47,8 @@ go_home just to look around.
 - When a call fails, read the error and change something before trying again. An identical \
 failing call is refused.
 - An error starting with [denied] means the user said no: don't repeat that action.
+- Don't ask the user to clarify a task: work it out from the lesson and the tool results, and \
+try code with run_code / run_code_exercise when unsure.
 - When the task is done, or can't be done, reply with text only (no tool calls): a short \
 summary in Russian of what was done and what is left.
 
@@ -71,7 +73,8 @@ checks in a row. Read the checker's message, fix the cause, verify again, then c
 2. Most quizzes accept ONE answer: answer_quiz with the option numbers, e.g. "2" or "1, 3", only \
 when you are sure. press_action_button opens content hidden behind a button.
 3. Code exercises: run_code_exercise to try, check_code_exercise to submit (complete code).
-4. complete_lesson moves on once every block is answered."""
+4. complete_lesson moves on once every block is answered. Unsure whether you're done? Call it: \
+if something is left, it fails and lists the unanswered blocks."""
 
 # Added to the user's message when the page is new to a local model.
 LOCAL_PAGE = "\n\n[Current page, from where_am_i]\n{page}"

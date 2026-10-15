@@ -119,8 +119,12 @@ record goes to `chat.log`.
 - `/clear` starts over.
 - `/help` lists the rest: `/where`, `/tools`, `/rounds`, `/verbose`, `/model`, `/think`, `/temp`.
 
-If the same call fails twice with the same error, the driver refuses to run it again. After
-three refusals it stops the run. A new message lifts both this stop and the stop after
+The driver refuses three kinds of repeats:
+- a call that has failed twice with the same error;
+- a read that has returned the same result twice in a row;
+- a check when nothing changed since the last failed check (each check is a recorded attempt).
+
+After three refusals it stops the run. A new message lifts both this stop and the stop after
 repeated failed checks. Once a local model's context is 75%
 full, older messages are cut harder; the token readout shows `prompt N/context`.
 

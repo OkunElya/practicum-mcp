@@ -92,7 +92,9 @@ def test_one_action_per_round_and_conversation_carries_over():
 
 def test_failed_checks_stop_and_new_message_lifts_it():
     check = Turn([{"tool": "check_task", "args": {}}], None, [])
-    c, s = make([check] * MAX_FAILED_CHECKS + [check, Turn([], "ok", [])], replies={"check_task": "Not solved"})
+    edit = Turn([{"tool": "press", "args": {}}], None, [])  # a change between checks, as a real fix would be
+    tries = [check] + [edit, check] * (MAX_FAILED_CHECKS - 1)
+    c, s = make(tries + [check, Turn([], "ok", [])], replies={"check_task": "Not solved"})
 
     async def go():
         await s.open()
@@ -181,3 +183,30 @@ def test_unparsable_tool_call_is_retried_with_a_nudge_and_new_seed(monkeypatch):
     assert seen[0] == (None, 5)
     assert seen[1][0][0]["content"] == pa.PARSE_NUDGE and seen[1][1] != 5
     assert all(m["content"] != pa.PARSE_NUDGE for m in b.messages)  # the nudge isn't kept in the history
+
+
+def test_same_read_with_same_result_is_refused_after_two():
+    read = Turn([{"tool": "read_lesson", "args": {}}], None, [])
+    c, s = make([read] * 6, replies={"read_lesson": "the same text"})
+
+    async def go():
+        await s.open()
+        return await s.ask("read", 20)
+
+    out = asyncio.run(go())
+    assert out.code == 4
+    assert [n for n, _ in c.calls] == ["read_lesson"] * REPEAT_LIMIT
+
+
+def test_recheck_without_changes_is_refused():
+    check = Turn([{"tool": "check_task", "args": {}}], None, [])
+    edit = Turn([{"tool": "press", "args": {}}], None, [])
+    c, s = make([check, check, edit, check, Turn([], "ok", [])], replies={"check_task": "Not solved."})
+
+    async def go():
+        await s.open()
+        return await s.ask("solve", 10)
+
+    assert asyncio.run(go()).code == 0
+    # The second check was refused (nothing changed); after an edit checking is allowed again.
+    assert [n for n, _ in c.calls] == ["check_task", "press", "check_task"]
