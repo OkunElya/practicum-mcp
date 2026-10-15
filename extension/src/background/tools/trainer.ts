@@ -6,6 +6,7 @@ import { sleep } from '../page';
 import type { Tool, ToolContext } from '../router';
 import { waitForPage } from './nav';
 import { spec } from './spec';
+import { block, refOf } from './theory';
 import { formatWhere } from './where';
 
 const RETRIES = 3;
@@ -132,6 +133,13 @@ const hintsShown = new Map<string, number>();
 export const showHint: Tool = {
   spec: spec('show_hint'),
   async run(args, ctx) {
+    if (args.block) {
+      const { block: b } = await block(ctx, args.block);
+      const hint = b.type === 'QuizCoding' ? String(b.node.content?.hint ?? '').trim() : '';
+      if (!hint) throw new ToolError(`${b.ref} has no hint`);
+      await ctx.page.op('codingPress', { block: refOf(b), button: 'hint' }).catch(() => {}); // show it on the page too
+      return `Hint for ${b.ref}:\n${hint}`;
+    }
     const t = await ctx.page.op<TaskInfo>('task');
     if (!t.task.hints.length) return 'This task has no hints.';
     const n = args.number ?? Math.min((hintsShown.get(t.task.id) ?? 0) + 1, t.task.hints.length);

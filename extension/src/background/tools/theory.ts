@@ -9,12 +9,12 @@ const SAVE_TIMEOUT_MS = 20_000;
 /** Quiz types the platform lets you answer again. */
 const RETRYABLE = new Set(['QuizCards', 'QuizChoice']);
 
-async function currentLesson(ctx: ToolContext) {
+export async function currentLesson(ctx: ToolContext) {
   const { lesson, answers } = await ctx.page.op<{ lesson: LessonJson; answers: SavedAnswer[] }>('lesson', {});
   return { lesson, answers, blocks: interactiveBlocks(lesson.theory, answers) };
 }
 
-async function block(ctx: ToolContext, ref: string): Promise<{ lesson: LessonJson; block: InteractiveBlock }> {
+export async function block(ctx: ToolContext, ref: string): Promise<{ lesson: LessonJson; block: InteractiveBlock }> {
   const { lesson, blocks } = await currentLesson(ctx);
   const b = findBlock(blocks, ref);
   if (!b) {
@@ -23,9 +23,9 @@ async function block(ctx: ToolContext, ref: string): Promise<{ lesson: LessonJso
   return { lesson, block: b };
 }
 
-const refOf = (b: InteractiveBlock): BlockRef => ({ nodeId: b.nodeId, contentId: b.contentId });
+export const refOf = (b: InteractiveBlock): BlockRef => ({ nodeId: b.nodeId, contentId: b.contentId });
 
-const fingerprint = (a: SavedAnswer | undefined) => JSON.stringify(a ? [a.user_answer, a.attempts_count ?? 0] : null);
+export const fingerprint = (a: SavedAnswer | undefined) => JSON.stringify(a ? [a.user_answer, a.attempts_count ?? 0] : null);
 
 /** Wait until the platform has stored a new submission for the block. */
 async function waitSaved(ctx: ToolContext, b: InteractiveBlock): Promise<void> {

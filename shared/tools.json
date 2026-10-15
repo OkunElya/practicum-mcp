@@ -119,6 +119,52 @@
       }
     },
     {
+      "name": "run_code_exercise",
+      "description": "Run a code block inside the current theory lesson (read_lesson shows it as [qN · code example …] or [qN · graded code exercise …]) and return what the program printed. Pass code to replace the block's code first. Runs are not graded.",
+      "effect": "rev",
+      "timeout_s": 300,
+      "params": {
+        "block": {
+          "type": "string",
+          "description": "block ref from read_lesson, e.g. q3"
+        },
+        "code": {
+          "type": "string",
+          "description": "complete new code for the block; omit to run the code as it is",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "check_code_exercise",
+      "description": "Submit a graded code exercise of the current theory lesson for checking by its tests and return whether it is solved, the checker's message and the program output. Pass code to replace the block's code first. Each check counts as an attempt; retries are allowed. Asks the user first.",
+      "effect": "irrev",
+      "timeout_s": 420,
+      "params": {
+        "block": {
+          "type": "string",
+          "description": "block ref from read_lesson, e.g. q3"
+        },
+        "code": {
+          "type": "string",
+          "description": "complete new code for the block; omit to check the code as it is",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "reset_code_exercise",
+      "description": "Start a code block of the current theory lesson over (its «Начать заново» button): the editor goes back to the starter code. Asks the user first.",
+      "effect": "irrev",
+      "timeout_s": 200,
+      "params": {
+        "block": {
+          "type": "string",
+          "description": "block ref from read_lesson, e.g. q3"
+        }
+      }
+    },
+    {
       "name": "set_code",
       "description": "Replace the whole content of a file in the trainer editor with code. For multi-file projects pass file (it is opened in the file tree if needed). The user can undo with Ctrl+Z.",
       "effect": "rev",
@@ -151,13 +197,18 @@
     },
     {
       "name": "show_hint",
-      "description": "Show the next hint of the current trainer task (or hint number N).",
+      "description": "Show a hint: in the code trainer, the next hint of the current task (or hint number N); in a theory lesson, pass block to get the hint of that graded code exercise.",
       "effect": "read",
       "timeout_s": 20,
       "params": {
         "number": {
           "type": "integer",
-          "description": "which hint, starting at 1; default: the next one",
+          "description": "trainer: which hint, starting at 1; default: the next one",
+          "optional": true
+        },
+        "block": {
+          "type": "string",
+          "description": "theory lesson: block ref of a graded code exercise, e.g. q3",
           "optional": true
         }
       }

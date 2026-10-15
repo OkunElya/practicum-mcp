@@ -388,6 +388,11 @@ like a user. The plan is semantic first, with DOM as the fallback.
   attempt 214457516), one check whose edit hadn't reached the platform (failed, 214457560, see §8),
   then **solved** (214457608) with `context = {'ice_cream': ice_cream_catalog[pk]}`. One more
   Практикум ИИ question there («Что делает тег {% empty %}…»). None of these lessons were completed.
+- Code-block tools (`QuizCoding`), «Типизация и типы данных» (2.1.3, already solved): example q1 run
+  once by a probe and once by the tool (it raises a TypeError on purpose), example q2 run with replaced
+  code (`print(2 ** 10, 7 // 2, 7 % 2)`, after several backend timeouts), graded q8 reset twice (one
+  probe reset cancelled) and **re-checked with `print(int(x) + int(y))`: solved**. Two page reloads at
+  the user's request (backend timeouts).
 
 Quiz answers were chosen by reasoning about the question, not by reading the leaked key.
 
@@ -431,6 +436,10 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
 - Quiz result marks (`…_correct` / `…_incorrect` classes) appear shortly after the answer is saved.
 - Markdown blocks can contain `{quiz-task} background: | … content: | … {/quiz-task}`: a coloured note
   box, not an interactive block.
+- `QuizCoding` blocks use CodeMirror 5, not Monaco; a page reload shows the starter code again even
+  for solved blocks (the solved attempt stays in `GET …/quizzes/`). Their run backend sometimes
+  answers «Request took too long to execute; timeout occured» (no result panel); retrying or
+  reloading helps (per the user, a load balancer may route to a dead server).
 - `trainerReducer.oldPlaygroundResponse` holds the latest serverless run **or** check result; a check
   adds `test_result` and a new `attempt_id`. `playgroundResponse` is the web_server check result.
 - Monaco objects reached through `wrappedJSObject` are raw page objects: passing content-script objects

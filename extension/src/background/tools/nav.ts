@@ -85,7 +85,7 @@ export const completeLesson: Tool = {
     const btn = before.controls.find((c) => c.id === NEXT_BUTTON);
     if (!btn || !btn.enabled) {
       const { lesson, answers } = await ctx.page.op<{ lesson: LessonJson; answers: SavedAnswer[] }>('lesson', {});
-      const open = interactiveBlocks(lesson.theory, answers).filter((b) => !b.answer && b.type !== 'QuizCoding');
+      const open = interactiveBlocks(lesson.theory, answers).filter((b) => !b.answer && (b.type !== 'QuizCoding' || b.node.content?.blocking));
       throw new ToolError(`the «next» button is not available${open.length ? `; unanswered blocks: ${open.map((b) => `${b.ref} ${b.type}`).join(', ')}` : ''}`);
     }
     const lessonId = before.lesson.id;

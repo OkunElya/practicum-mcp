@@ -62,6 +62,8 @@ the tools, `uv run practicum-call where_am_i` calls one.
 | `open_lesson`, `go_home`, `next_task` | navigation (opening a lesson marks it visited) | nav |
 | `complete_lesson` | "К следующему уроку" / "Перейти к заданию" | **asks first** |
 | `press_action_button`, `answer_quiz` | theory buttons and quizzes (`"2"`, `"1, 3"`, `"1=B; 2=A"`, free text) | **asks first** |
+| `run_code_exercise` | run a code block inside a theory lesson, optionally with new code | reversible |
+| `check_code_exercise`, `reset_code_exercise` | submit a graded code block; start a block over | **asks first** |
 | `set_code` | replace a file in the editor (undo with Ctrl+Z) | reversible |
 | `run_code`, `deploy`, `fetch_preview` | run Python, deploy a Django project, read its pages | reversible / read |
 | `check_task` | submit for checking (an attempt) | **asks first** |
@@ -115,6 +117,4 @@ How the site works, and why the tools do what they do:
 
 ### Known gaps
 
-- `QuizCoding` (code exercises inside theory lessons) is shown by `read_lesson` but
-  can't be answered by a tool yet.
 - Search, notes, ratings and the AI summary button have no tools.

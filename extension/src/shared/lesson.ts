@@ -157,9 +157,19 @@ function renderInteractive(b: InteractiveBlock, out: string[]): void {
       return;
     case 'QuizCoding': {
       const panes: any[] = c.panes ?? [];
-      out.push(`[${b.ref} · code exercise (${c.language ?? 'code'}) · ${a?.test_result?.stdout?.solved ? 'solved' : b.answer ? 'attempted' : 'not attempted'}]`);
+      const lang = c.language ?? 'code';
+      if (c.use_tests) {
+        const st = a?.test_result?.stdout?.solved ? 'solved' : b.answer ? 'attempted, not solved' : 'not attempted';
+        out.push(`[${b.ref} · graded code exercise (${lang}) · ${st}${c.hint ? ' · hint: show_hint block=' + b.ref : ''} · run_code_exercise / check_code_exercise]`);
+      } else {
+        out.push(`[${b.ref} · code example (${lang}) · ${b.answer ? 'was run' : 'not run'}${c.blocking ? ' · run it to unlock what follows' : ''} · run_code_exercise]`);
+      }
+      out.push('Starter code:');
       for (const p of panes) out.push('```' + (p.language ?? ''), String(p.content ?? '').trimEnd(), '```');
-      if (c.hint) out.push(`  hint available`);
+      const mine = a?.panes?.[0]?.content;
+      if (typeof mine === 'string' && mine.trim() && mine.trim() !== String(panes[0]?.content ?? '').trim()) {
+        out.push('Your last submitted code:', '```' + lang, mine.trimEnd(), '```');
+      }
       return;
     }
     case 'QuizFeedback':

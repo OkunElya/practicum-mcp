@@ -94,12 +94,15 @@ prompt (on by default, can be switched off in the popup).
 | ✅ `complete_lesson` | — | "К следующему уроку" / "Перейти к заданию"; lists unanswered blocks if the button is missing; verifies solved + new page | irrev | A11, A12 |
 | ✅ `press_action_button` | `block` (q-ref) | ActionButton by `theory-action-button-{nodeId}`, waits until the press is saved | irrev | C1 |
 | ✅ `answer_quiz` | `block`, `answer`, `retry` | flat answer string ("2", "1, 3", "1=B; 2=A", free text) parsed against read_lesson's numbering; fills via UI, submits, waits for the saved attempt, returns what the page shows + correct/incorrect marks. Live-tested on every type except the survey (not automated) and QuizCoding (no tool yet) | irrev | C2–C7 |
+| ✅ `run_code_exercise` | `block`, `code?` | QuizCoding: optionally replace the CodeMirror code, «Запустить код», return output; site timeouts retried | rev | C11 |
+| ✅ `check_code_exercise` | `block`, `code?` | graded QuizCoding: write, «Проверить», wait for the saved attempt; solved + checker message + output | irrev | C11 |
+| ✅ `reset_code_exercise` | `block` | «Начать заново» + inline «Да»; reports the editor code afterwards | irrev (asks) | C11 |
 | ✅ `read_task` | — | trainer task text, files, hints count, solved, preview URL | read | B3, E1 |
 | ✅ `get_code` | `file?` | live editor text; unopened project files are opened via the file tree first | read | D1, E1 |
 | ✅ `set_code` | `code`, `file?` | bring the file's tab to the front via the tree (the platform records edits only from the visible tab), one undoable Monaco edit, verify `task.panes` took it | rev | D1, E2, E3 |
 | ✅ `run_code` | — | serverless run, exit code/stdout/stderr; retries platform errors | rev | D2 |
 | ✅ `check_task` | — | check, wait for a **new attempt id** (web_server checks redeploy first, so button state is not a reliable end signal), retry platform errors; solved + checker message. Live-tested: serverless pass, web_server fail and pass | irrev | D3, E8 |
-| ✅ `show_hint` | `number?` | presses the hint button and returns the next hint text | read | D4 |
+| ✅ `show_hint` | `number?`, `block?` | trainer: next hint; theory: the hint of a graded code block | read | D4 |
 | ✅ `next_task` | `direction=next\|prev` | «Далее» / icon button «Предыдущее задание» (aria-label), waits for the new task | nav | A13, A14 |
 | ✅ `deploy` | — | web_server deploy, wait for a new running server, return preview URL | rev | E4 |
 | ✅ `fetch_preview` | `path="/"` | GET the deployed site (no cookies) | read | E5 |

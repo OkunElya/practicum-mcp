@@ -101,7 +101,7 @@ export function planAnswer(block: InteractiveBlock, answer: string): QuizPlan {
     case 'QuizFeedback':
       throw new ToolError('this is the sprint feedback survey: it asks for the user\'s own opinion, so the user fills it in themselves');
     case 'QuizCoding':
-      throw new ToolError('code exercises inside lessons are not supported by tools yet');
+      throw new ToolError(`${block.ref} is a code block: use run_code_exercise or check_code_exercise`);
     case 'ActionButton':
       throw new ToolError(`${block.ref} is a button, not a quiz: use press_action_button`);
     default:
