@@ -325,6 +325,7 @@ class OllamaBackend:
         if page and (first or page_changed):
             text += LOCAL_PAGE.format(page=page)
         self.messages.append({"role": "user", "content": text})
+        self.note("user message", text)
 
     def _view(self) -> list[dict]:
         squeeze = bool(self.ctx) and self.prompt_tokens > self.SQUEEZE_AT * self.ctx

@@ -4,7 +4,7 @@ import { ToolError } from '../../shared/protocol';
 import { sleep } from '../page';
 import type { Tool, ToolContext } from '../router';
 import { spec } from './spec';
-import { block, currentLesson, fingerprint, refOf } from './theory';
+import { block, currentLesson, fingerprint, onBlock, refOf } from './theory';
 
 const RETRIES = 3;
 const PLATFORM_ERROR = /Неизвестная ошибка|\b\d{3}\.[a-zA-Z]+|took too long|timeout occur/i;
@@ -64,10 +64,10 @@ export const runCodeExercise: Tool = {
     const { b } = await codingBlock(ctx, args.block);
     if (args.code) {
       ctx.step('writing the code');
-      await ctx.page.op('codingSetCode', { block: refOf(b), code: args.code });
+      await onBlock(ctx, b, () => ctx.page.op('codingSetCode', { block: refOf(b), code: args.code }));
     }
     ctx.step('running');
-    const s = await pressAndWait(ctx, b, 'run');
+    const s = await onBlock(ctx, b, () => pressAndWait(ctx, b, 'run'));
     const note = graded(b) ? ' This was a run, not a check: use check_code_exercise to submit.' : '';
     return `${output(s)}${note}`;
   },
@@ -85,10 +85,10 @@ export const checkCodeExercise: Tool = {
     if (!graded(b)) throw new ToolError(`${b.ref} is a runnable example without tests; use run_code_exercise`);
     if (args.code) {
       ctx.step('writing the code');
-      await ctx.page.op('codingSetCode', { block: refOf(b), code: args.code });
+      await onBlock(ctx, b, () => ctx.page.op('codingSetCode', { block: refOf(b), code: args.code }));
     }
     ctx.step('checking');
-    const s = await pressAndWait(ctx, b, 'check');
+    const s = await onBlock(ctx, b, () => pressAndWait(ctx, b, 'check'));
     // The verdict is the saved attempt; wait until the new one is stored.
     const before = fingerprint(b.answer);
     const saved = await ctx.page.waitFor('the attempt to be saved', async () => {

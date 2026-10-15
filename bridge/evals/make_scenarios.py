@@ -20,6 +20,7 @@ task; journey-theory-* is three consecutive theory lessons of one topic.
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -113,11 +114,20 @@ def theory_scenarios(per_type: int) -> list[str]:
     return names
 
 
+# Free-text tasks whose answer comes from the student's own machine: an agent can't know it and
+# should leave them for the user (lesson 8.2.5 asks for pytest output on the student's computer).
+USER_ONLY = re.compile(r"Выполните (эту )?команд|Запустите (тесты|команд)|на своём компьютере|в своём терминале", re.I)
+
+
+def user_only(lesson: dict) -> list[str]:
+    return [n["id"] for n in nodes(lesson["theory"]) if n["type"] == "QuizText" and USER_ONLY.search(str((n.get("content") or {}).get("content", "")))]
+
+
 def write_lesson(d: Path, lesson: dict, index: dict, label: str) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / "lesson.json").write_text(json.dumps(lesson, ensure_ascii=False))
     nxt = index.get(lesson.get("next_lesson_id") or "", {})
-    meta = {"kind": "lesson", "focus": label, "types": sorted(kinds(lesson)), "pos": index.get(lesson["id"], {}).get("pos"), "next": {"name": nxt.get("name"), "type": nxt.get("type")}}
+    meta = {"kind": "lesson", "focus": label, "types": sorted(kinds(lesson)), "pos": index.get(lesson["id"], {}).get("pos"), "next": {"name": nxt.get("name"), "type": nxt.get("type")}, "user_only": user_only(lesson)}
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1))
 
 

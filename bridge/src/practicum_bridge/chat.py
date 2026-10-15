@@ -102,7 +102,7 @@ class Console:
         if self.verbose:
             print(f"\n{self.paint('2', f'[{stamp}]')} {self.paint('1', f'── {kind} ──')}\n{text}", flush=True)
             return
-        if kind.startswith("to ") or kind in ("round", "done", "reset chat"):
+        if kind.startswith("to ") or kind in ("round", "done", "reset chat", "user message"):
             return  # prompts are long, the answer was shown as the model's reply
         if kind == "tokens":
             print(self.paint("2", f"  [{text}]"), flush=True)

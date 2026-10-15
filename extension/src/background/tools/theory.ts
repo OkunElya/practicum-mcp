@@ -26,6 +26,24 @@ export async function block(ctx: ToolContext, ref: string): Promise<{ lesson: Le
 
 export const refOf = (b: InteractiveBlock): BlockRef => ({ nodeId: b.nodeId, contentId: b.contentId });
 
+/**
+ * Run a page op on a block; if the block isn't rendered yet, say which earlier
+ * blocks hide it (a small model retries the same call when told only "not on the page").
+ */
+export async function onBlock<T>(ctx: ToolContext, b: InteractiveBlock, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!(e instanceof ToolError) || !e.message.startsWith('this block is not on the page')) throw e;
+    const { blocks } = await currentLesson(ctx);
+    const i = blocks.findIndex((x) => x.nodeId === b.nodeId);
+    const before = blocks.slice(0, Math.max(i, 0)).filter((x) => !x.answer && (x.type === 'ActionButton' || x.node.content?.blocking));
+    if (!before.length) throw e;
+    const how = (x: InteractiveBlock) => (x.type === 'ActionButton' ? `press_action_button block=${x.ref} («${x.node.content?.text ?? 'button'}»)` : `${x.ref} ${x.type}`);
+    throw new ToolError(`${b.ref} is still hidden on the page: first deal with ${before.map(how).join(', ')}, then try ${b.ref} again`);
+  }
+}
+
 export const fingerprint = (a: SavedAnswer | undefined) => JSON.stringify(a ? [a.user_answer, a.attempts_count ?? 0] : null);
 
 /** Wait until the platform has stored a new submission for the block. */
@@ -54,7 +72,7 @@ export const pressActionButton: Tool = {
     if (b.type !== 'ActionButton') throw new ToolError(`${b.ref} is a ${b.type}, not a button; use answer_quiz`);
     if (b.answer) return `${b.ref} was already pressed; its content is visible.`;
     const label = String(b.node.content?.text ?? 'button');
-    await ctx.page.op('pressActionButton', { block: refOf(b), label });
+    await onBlock(ctx, b, () => ctx.page.op('pressActionButton', { block: refOf(b), label }));
     await waitSaved(ctx, b);
     return `Pressed «${label}» (${b.ref}). The content after it is now shown; read_lesson to continue.`;
   },
@@ -167,10 +185,12 @@ export const answerQuiz: Tool = {
   },
   async run(args, ctx) {
     const { block: b } = await block(ctx, args.block);
-    if (b.type === 'QuizChat') return answerChat(ctx, b, args.answer);
+    if (b.type === 'QuizChat') return onBlock(ctx, b, () => answerChat(ctx, b, args.answer));
     checkAnswerable(b, args.retry);
     const plan = planAnswer(b, args.answer);
     const ref = refOf(b);
+    // The first step finds the block on the page: a hidden one fails here, before anything is clicked.
+    await onBlock(ctx, b, () => ctx.page.op('quizState', { block: ref }));
     if (b.answer) {
       ctx.step('starting the quiz again');
       await ctx.page.op('quizStep', { block: ref, step: { kind: 'retry' } });

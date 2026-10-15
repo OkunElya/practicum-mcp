@@ -126,7 +126,18 @@ def test_key_answers_are_graded_correct_and_finish_the_lesson(tmp_path, raw):
 @pytest.mark.parametrize("raw", lessons_with("QuizSelect")[:15], ids=lambda p: p.stem[:8])
 def test_wrong_single_choice_is_marked_and_cannot_be_retried(tmp_path, raw):
     sim = sim_for(tmp_path, raw)
-    b = next(b for b in sim.blocks() if b["type"] == "QuizSelect")
+    from sims import SimError
+
+    def shown(b):
+        try:
+            sim.visible(b)
+            return True
+        except SimError:
+            return False
+
+    b = next((b for b in sim.blocks() if b["type"] == "QuizSelect" and shown(b)), None)
+    if b is None:
+        pytest.skip("every single-choice question is behind a button")
     c = sim.node(b["nodeId"])["content"]
     wrong = next((i for i, o in enumerate(c["options"]) if not o.get("correct")), None)
     if wrong is None:
@@ -199,3 +210,15 @@ def test_journey_routes_goes_through_every_page(tmp_path):
         assert not r.is_error, r.content[0].text
     assert sim.finished and sim.metrics()["pages_done"] == len(sim.dirs) == 6
     assert len(set(urls)) == len(urls), urls  # every page has its own URL: the driver sees the change
+
+
+
+def test_blocks_behind_a_button_say_which_button(tmp_path):
+    for raw in lessons_with("ActionButton"):
+        sim = sim_for(tmp_path, raw)
+        blocks = sim.blocks()
+        if blocks and blocks[0]["type"] == "ActionButton" and len(blocks) > 1 and blocks[1]["type"].startswith("Quiz"):
+            r = sim._call("answer_quiz", {"block": blocks[1]["ref"], "answer": "1"})
+            assert r.is_error and f"press_action_button block={blocks[0]['ref']}" in r.content[0].text, r.content[0].text
+            return
+    pytest.skip("no lesson with a quiz right after a button")

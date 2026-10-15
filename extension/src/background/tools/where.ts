@@ -1,3 +1,4 @@
+import type { ProgressTree } from '../../content/ops/read';
 import type { WhereInfo } from '../../content/ops/where';
 import type { Tool } from '../router';
 import { spec } from './spec';
@@ -12,7 +13,23 @@ const KIND_LABEL: Record<WhereInfo['kind'], string> = {
 export const whereAmI: Tool = {
   spec: spec('where_am_i'),
   async run(_args, ctx) {
-    return formatWhere(await ctx.page.op<WhereInfo>('where'));
+    const w = await ctx.page.op<WhereInfo>('where');
+    const text = formatWhere(w);
+    if (!w.modal || w.kind !== 'profile') return text;
+    // A course window on the main page: say which course it is and what is left in it,
+    // in open_lesson's numbering (a small model doesn't connect the title to get_progress).
+    const tree = await ctx.page.op<ProgressTree>('progress').catch(() => null);
+    const ci = tree?.courses.findIndex((c) => c.name.trim() === w.modal!.trim()) ?? -1;
+    if (!tree || ci < 0) return text;
+    const course = tree.courses[ci];
+    const lessons = course.topics.flatMap((t, ti) => t.lessons.map((l, li) => ({ ...l, pos: `${ci + 1}.${ti + 1}.${li + 1}` })));
+    const open = lessons.filter((l) => !l.solved);
+    const lines = [`The open dialog is course ${ci + 1} «${course.name}»: ${lessons.length - open.length}/${lessons.length} lessons solved.`];
+    if (open.length) {
+      lines.push('Unsolved lessons in it, in order (open_lesson takes these numbers):');
+      for (const l of open) lines.push(`- ${l.pos} «${l.name}» [${l.type}]${l.hasAccess ? '' : ' (locked)'}`);
+    }
+    return `${text}\n${lines.join('\n')}`;
   },
 };
 

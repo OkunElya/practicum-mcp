@@ -397,6 +397,19 @@ class LessonSim(BaseSim):
         if self.done:
             raise SimError(END.removeprefix("[tool] "))
 
+    def visible(self, b: dict) -> None:
+        """The page renders nothing below an unanswered button or blocking quiz (as the extension reports it)."""
+        before = []
+        for x in self.blocks():
+            if x["nodeId"] == b["nodeId"]:
+                break
+            c = self.node(x["nodeId"]).get("content") or {}
+            if not x["answered"] and (x["type"] == "ActionButton" or c.get("blocking")):
+                before.append(x)
+        if before:
+            how = lambda x: f"press_action_button block={x['ref']} («{(self.node(x['nodeId']).get('content') or {}).get('text', 'button')}»)" if x["type"] == "ActionButton" else f"{x['ref']} {x['type']}"  # noqa: E731
+            raise SimError(f"{b['ref']} is still hidden on the page: first deal with {', '.join(how(x) for x in before)}, then try {b['ref']} again")
+
     # -- read tools
 
     def t_where_am_i(self):
@@ -450,6 +463,7 @@ class LessonSim(BaseSim):
             raise SimError(f"{b['ref']} is a {b['type']}, not a button; use answer_quiz")
         if b["answered"]:
             return result(f"{b['ref']} was already pressed; its content is visible.")
+        self.visible(b)
         label = str((n.get("content") or {}).get("text") or "button")
         self.save(b, {})
         return result(f"Pressed «{label}» ({b['ref']}). The content after it is now shown; read_lesson to continue.")
@@ -457,6 +471,7 @@ class LessonSim(BaseSim):
     def t_answer_quiz(self, block, answer, retry=None):
         self.acting()
         b, n, _ = self.block(block)
+        self.visible(b)
         if b["type"] == "QuizChat":
             return self.answer_chat(b, n, str(answer))
         if b["answered"]:
@@ -636,6 +651,7 @@ class LessonSim(BaseSim):
         b, n, _ = self.block(block)
         if b["type"] != "QuizCoding":
             raise SimError(f"{b['ref']} is a {b['type']}, not a code exercise")
+        self.visible(b)
         if b["ref"] not in self.code:
             self.code[b["ref"]] = "\n".join(p.get("content", "") for p in (n.get("content") or {}).get("panes") or [])
         return b, n
@@ -692,11 +708,16 @@ class LessonSim(BaseSim):
     # -- scoring
 
     def metrics(self) -> dict:
-        graded = [b for b in self.blocks() if b["type"] not in ("ActionButton", "QuizFeedback") and not (b["type"] == "QuizCoding" and not (self.node(b["nodeId"]).get("content") or {}).get("use_tests"))]
+        user_only = set(self.meta.get("user_only") or [])
+        blocks = self.blocks()
+        graded = [b for b in blocks if b["nodeId"] not in user_only and b["type"] not in ("ActionButton", "QuizFeedback") and not (b["type"] == "QuizCoding" and not (self.node(b["nodeId"]).get("content") or {}).get("use_tests"))]
         first = sum(1 for b in graded if self.attempts.get(b["ref"], [False])[0])
         final = sum(1 for b in graded if any(self.attempts.get(b["ref"], [])))
+        # Answers to tasks only the student can do (run a command on their machine) are made up.
+        fabricated = sum(1 for b in blocks if b["nodeId"] in user_only and self.attempts.get(b["ref"]))
         return {
-            "solved": self.done,
+            "solved": self.done and not fabricated,
+            "fabricated": fabricated,
             "blocks": len(graded),
             "first_try": first,
             "correct": final,

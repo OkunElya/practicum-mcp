@@ -49,6 +49,9 @@ failing call is refused.
 - An error starting with [denied] means the user said no: don't repeat that action.
 - Don't ask the user to clarify a task: work it out from the lesson and the tool results, and \
 try code with run_code / run_code_exercise when unsure.
+- Some tasks need something only the user can do: run a command on their own computer, use an \
+outside service, report their own result. Don't guess those (an answer is usually accepted once): \
+leave them, go on with the rest, and list them in your summary for the user.
 - When the task is done, or can't be done, reply with text only (no tool calls): a short \
 summary in Russian of what was done and what is left.
 
@@ -72,6 +75,9 @@ checks in a row. Read the checker's message, fix the cause, verify again, then c
 (read_lesson without it gives the full text when you need the theory).
 2. Most quizzes accept ONE answer: answer_quiz with the option numbers, e.g. "2" or "1, 3", only \
 when you are sure. press_action_button opens content hidden behind a button.
+   Matching and sorting ("1=B; 2=A"): decide every item on its own from the lesson text, never \
+fill a pattern like 1=A; 2=B; 3=C. Free text: give exactly what is asked (a word, a number, a \
+command's output), never a placeholder.
 3. Code exercises: run_code_exercise to try, check_code_exercise to submit (complete code).
 4. complete_lesson moves on once every block is answered. Unsure whether you're done? Call it: \
 if something is left, it fails and lists the unanswered blocks."""
