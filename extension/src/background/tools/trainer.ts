@@ -166,8 +166,15 @@ export const showHint: Tool = {
 export const nextTask: Tool = {
   spec: spec('next_task'),
   async run(args, ctx) {
-    const before = await snap(ctx);
+    let before = await snap(ctx);
     const prev = args.direction === 'prev';
+    if (!prev && !before.next && before.taskSolved) {
+      // «Далее» renders a moment after the solved verdict.
+      before = await ctx.page.waitFor('the «Далее» button', async () => {
+        const s = await snap(ctx);
+        return s.next ? s : null;
+      }, 8000).catch(() => before);
+    }
     const btn = prev ? before.prev : before.next;
     if (!btn) throw new ToolError(prev ? 'there is no previous task' : 'the «Далее» button appears only after the task is solved (check_task)');
     await ctx.page.op('trainerPress', { button: prev ? 'prev' : 'next', label: btn.label });

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Practicum MCP",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Lets an MCP client (via the local Python bridge) act in your Yandex Practicum tab, visibly and with your approval.",
   "browser_specific_settings": {
     "gecko": { "id": "practicum-mcp@local", "strict_min_version": "128.0" }

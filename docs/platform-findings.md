@@ -459,6 +459,12 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
 - Local agent run on «Распределение адресов по приложениям»: task 1 solved (3 checks) by gpt-oss;
   task 2 needs a new file `about/urls.py` (created by hand during inspection, empty); «View-функции:
   от запроса до ответа» task 1: 4 failed checks, its `anfisa_for_friends/urls.py` left broken.
+- After the task reset («Начать заново», task 2 of «Распределение адресов по приложениям»: starter code
+  back, created files removed), gpt-oss-32k created about/urls.py itself with create_file (prompted by
+  the tool's "use create_file" hint) and **solved task 2** on the 2nd check. Task 3: it created
+  ice_cream/urls.py too, but two corrupted generations broke ice_cream/views.py (later rewritten with
+  invented emoji views); stopped by the 3-failed-checks guard, missing only `path('ice_cream/', …)`.
+- «Далее» (`next-task-button`) renders a moment after the solved verdict; next_task waits for it.
 - `trainerReducer.oldPlaygroundResponse` holds the latest serverless run **or** check result; a check
   adds `test_result` and a new `attempt_id`. `playgroundResponse` is the web_server check result.
 - Monaco objects reached through `wrappedJSObject` are raw page objects: passing content-script objects
