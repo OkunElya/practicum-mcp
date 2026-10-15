@@ -27,6 +27,8 @@ async function pressAndWait(
   label: string,
   changed: (before: TrainerSnapshot, now: TrainerSnapshot) => boolean,
   timeoutMs: number,
+  /** Only `changed` (or a platform error) ends the wait: no "button came back" shortcuts. */
+  strict = false,
 ): Promise<{ before: TrainerSnapshot; after: TrainerSnapshot }> {
   for (let attempt = 1; ; attempt++) {
     const before = await snap(ctx);
@@ -42,6 +44,7 @@ async function pressAndWait(
         if (!ready) sawBusy = true;
         if (now.errorText && now.errorText !== before.errorText && PLATFORM_ERROR.test(now.errorText)) return now;
         if (ready && changed(before, now)) return now;
+        if (strict) return null;
         if (ready && sawBusy) return now;
         if (ready && Date.now() - started > 10_000) return now; // result identical to the previous one
         return null;
@@ -89,21 +92,28 @@ export const checkTask: Tool = {
     return `Check task ${t.index + 1}/${t.total} of «${t.lessonName}» (counts as an attempt)`;
   },
   async run(_args, ctx) {
-    const { before, after: s } = await pressAndWait(
+    // A web_server check redeploys first and the buttons re-enable in between,
+    // so the only reliable end signal is a new attempt id (or solved flipping).
+    const attemptOf = (x: TrainerSnapshot) => x.webCheck?.attempt_id ?? x.serverless?.attempt_id ?? null;
+    let { after: s } = await pressAndWait(
       ctx,
       'check',
       'Проверить',
-      (b, n) => n.taskSolved !== b.taskSolved || json(b.serverless) !== json(n.serverless) || json(b.webCheck) !== json(n.webCheck),
-      150_000,
+      (b, n) => n.taskSolved !== b.taskSolved || (attemptOf(n) !== null && attemptOf(n) !== attemptOf(b)),
+      180_000,
+      true,
     );
-    const fresh = json(before.serverless) !== json(s.serverless) || json(before.webCheck) !== json(s.webCheck) || before.taskSolved !== s.taskSolved;
-    if (!fresh) {
-      throw new ToolError(`the check finished without a new result on the page${s.resultText ? `; result panel: ${clip(s.resultText, 500)}` : ''}`, 'platform');
+    if (s.taskSolved && !s.next) {
+      // The success banner and «Далее» render a moment after the verdict.
+      s = await ctx.page.waitFor('the success banner', async () => {
+        const now = await snap(ctx);
+        return now.next ? now : null;
+      }, 4000).catch(() => s);
     }
     const web = s.webCheck?.test_result;
     const srv = s.serverless?.test_result;
     const solved = s.taskSolved || web?.solved === true || srv?.stdout?.solved === true;
-    const message = String(web?.message || srv?.stdout?.error || '').trim();
+    const message = String(web?.message || srv?.stdout?.error || (!s.taskSolved ? s.errorText : '') || '').trim();
     const attempt = s.webCheck?.attempt_id ?? s.serverless?.attempt_id;
     const lines = [`${solved ? 'Solved ✓' : 'Not solved.'}${attempt ? ` (attempt ${attempt})` : ''}`];
     if (message) lines.push(`Checker: ${clip(message, 2000)}`);

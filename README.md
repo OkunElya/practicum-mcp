@@ -115,8 +115,6 @@ How the site works, and why the tools do what they do:
 
 ### Known gaps
 
-- Not yet checked live: `press_action_button`; `answer_quiz` for single-attempt types
-  (radio/checkbox, free text, connect-the-items); `check_task` on Django projects.
 - `QuizCoding` (code exercises inside theory lessons) is shown by `read_lesson` but
   can't be answered by a tool yet.
 - Search, notes, ratings and the AI summary button have no tools.

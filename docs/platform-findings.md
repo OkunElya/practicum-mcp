@@ -381,6 +381,13 @@ like a user. The plan is semantic first, with DOM as the fallback.
   (5.4.3), stage 2 (unsolved): opened `ice_cream/urls.py` and rewrote it with identical content, one
   deploy, preview pages fetched. Nothing checked there. Then, approved: `ask_platform_ai` asked one
   question in that lesson's chat («Как в шаблоне Django обратиться к значению словаря по ключу?»).
+- Verification of the remaining tools on unsolved lessons (asked for by the user, each approved):
+  6.1.6 «Получение данных» q1 radio → «Выборка будет пустой» (correct); 7.1.10 «Валидация формы» q1
+  button «Готово» pressed, q2 free text «ACDB» (correct); 7.3.1 «Работа с пользователями в Django» q1
+  connect-the-items 1=B, 2=A (correct). 5.4.3 stage 2 (Django): one check of the unchanged code (failed,
+  attempt 214457516), one check whose edit hadn't reached the platform (failed, 214457560, see §8),
+  then **solved** (214457608) with `context = {'ice_cream': ice_cream_catalog[pk]}`. One more
+  Практикум ИИ question there («Что делает тег {% empty %}…»). None of these lessons were completed.
 
 Quiz answers were chosen by reasoning about the question, not by reading the leaked key.
 
@@ -414,6 +421,16 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
 - Answered quizzes have `quiz_answered` on the block root; per-row results are classes ending in
   `_correct` / `_incorrect` (`quiz-form-matching__prompt_correct`, `quiz__macaroni-pin_status_correct`,
   `quiz__list-item_correct`); radio/checkbox show feedback text instead.
+- **Editing a hidden editor tab is not recorded.** Each open file has its own Monaco editor; only the
+  visible one's changes reach `trainerReducer.task.panes`, which is what deploy and check send. Bring
+  the file's tab to the front (click it in the tree) before editing, then confirm `task.panes`.
+- A failed web_server check: `playgroundResponse = {test_result: {status: "ok", message: "<checker
+  text>", solved: false}, run_result: null, attempt_id}`; the page shows the message in
+  `.notification_type_error.trainer-footer__message`. The check redeploys first and the buttons
+  re-enable briefly in between, so wait for a new `attempt_id`.
+- Quiz result marks (`…_correct` / `…_incorrect` classes) appear shortly after the answer is saved.
+- Markdown blocks can contain `{quiz-task} background: | … content: | … {/quiz-task}`: a coloured note
+  box, not an interactive block.
 - `trainerReducer.oldPlaygroundResponse` holds the latest serverless run **or** check result; a check
   adds `test_result` and a new `attempt_id`. `playgroundResponse` is the web_server check result.
 - Monaco objects reached through `wrappedJSObject` are raw page objects: passing content-script objects

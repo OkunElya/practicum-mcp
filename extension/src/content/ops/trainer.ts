@@ -141,20 +141,36 @@ export async function openFile(file: string): Promise<any> {
   throw new ToolError(`opened ${want} but its editor did not appear`);
 }
 
+const editorOf = (model: any) => Array.from(pageWindow().monaco.editor.getEditors() as any[]).find((e) => e.getModel() === model);
+const shown = (editor: any) => !!editor?.getDomNode()?.offsetParent;
+const norm = (s: string) => s.replace(/\r\n/g, '\n');
+
+/** The platform's own copy of a project file (what deploy/check send). */
+function storedPane(path: string): string | null {
+  const panes: any[] = state()?.trainerReducer?.task?.panes ? Array.from(state().trainerReducer.task.panes) : [];
+  const pane = panes.find((p) => p.name === path);
+  return pane ? String(pane.content ?? '') : null;
+}
+
 export async function setCode({ file, code }: { file?: string; code: string }): Promise<{ file: string; previousLength: number }> {
   let model = findModel(file);
   if (!model && file) model = await openFile(file);
   if (!model) throw new ToolError('no editor model found');
-  const monaco = pageWindow().monaco;
-  const editor = Array.from(monaco.editor.getEditors() as any[]).find((e) => e.getModel() === model);
-  if (!editor) throw new ToolError(`${modelPath(model)} is not open in an editor`);
+  const path = modelPath(model);
+  // The platform only records edits from the editor tab on screen; an edit in
+  // a hidden tab changes the editor but not the files deploy/check send.
+  if (!shown(editorOf(model)) && treeNames().length) await openFile(path);
+  const editor = editorOf(model);
+  if (!editor) throw new ToolError(`${path} is not open in an editor`);
+  if (!shown(editor)) throw new ToolError(`could not bring ${path} to the front`);
+
   // getDomNode() hands back the raw page object; re-wrap it so calls with
   // content-script arguments (scrollIntoView options) are allowed.
   const raw = editor.getDomNode();
   const dom = raw ? (XPCNativeWrapper(raw) as HTMLElement) : null;
   if (dom) {
     dom.scrollIntoView({ block: 'center' });
-    highlight(dom, `write ${modelPath(model)}`, 1200);
+    highlight(dom, `write ${path}`, 1200);
     await sleep(350);
   }
   const previousLength = String(model.getValue()).length;
@@ -164,9 +180,14 @@ export async function setCode({ file, code }: { file?: string; code: string }): 
   editor.pushUndoStop();
   editor.executeEdits('practicum-mcp', edits);
   editor.pushUndoStop(); // so the user can undo the whole replacement with Ctrl+Z
-  const norm = (s: string) => s.replace(/\r\n/g, '\n');
   if (norm(String(model.getValue())) !== norm(code)) throw new ToolError('the editor did not take the new code');
-  return { file: modelPath(model), previousLength };
+
+  // Multi-file projects keep their files in task.panes: make sure the edit landed there.
+  if (storedPane(path) !== null) {
+    for (let i = 0; i < 20 && norm(storedPane(path)!) !== norm(code); i++) await sleep(150);
+    if (norm(storedPane(path)!) !== norm(code)) throw new ToolError(`the editor shows the new ${path}, but the platform did not record it (it would not be deployed or checked)`);
+  }
+  return { file: path, previousLength };
 }
 
 /** Lesson tasks for opening a practice lesson at its first unsolved task. */

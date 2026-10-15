@@ -104,7 +104,14 @@ export const answerQuiz: Tool = {
     ctx.step('submitting');
     await ctx.page.op('quizStep', { block: ref, step: { kind: 'submit' } });
     await waitSaved(ctx, b);
-    const shown = await ctx.page.op<{ answered: boolean; correct: number; incorrect: number; text: string }>('quizState', { block: ref });
+    // Result marks (green/red rows, pins) render a moment after the save.
+    type Shown = { answered: boolean; correct: number; incorrect: number; text: string };
+    const shown = await ctx.page
+      .waitFor('the result marks', async () => {
+        const st = await ctx.page.op<Shown>('quizState', { block: ref });
+        return st.answered && st.correct + st.incorrect > 0 ? st : null;
+      }, 3000, 300)
+      .catch(() => ctx.page.op<Shown>('quizState', { block: ref }));
     const marks = shown.correct + shown.incorrect ? `\nThe page marks ${shown.correct} correct, ${shown.incorrect} incorrect.` : '';
     return `Answer to ${b.ref} submitted.${marks}\nThe quiz now shows:\n${shown.text}`;
   },

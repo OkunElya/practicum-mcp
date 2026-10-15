@@ -50,3 +50,9 @@ export async function aiSend({ question }: { question: string }): Promise<true> 
   await press(submit, 'send');
   return true;
 }
+
+export async function aiClose(): Promise<true> {
+  const close = document.querySelector<HTMLElement>('[data-test-id="yagpt-close-button"]');
+  if (close && isVisible(close)) await press(close, 'close Практикум ИИ');
+  return true;
+}
