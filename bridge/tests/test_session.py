@@ -44,8 +44,8 @@ class FakeBackend:
     async def reset(self):
         return True
 
-    def user(self, text, page_changed):
-        self.users.append((text, page_changed))
+    def user(self, text, page_changed, page):
+        self.users.append((text, page_changed, page))
 
     async def turn(self):
         return self.turns.pop(0) if self.turns else Turn([], "done", [])
@@ -87,7 +87,7 @@ def test_one_action_per_round_and_conversation_carries_over():
     # Reads and one action ran; the second action was skipped, empty arg keys dropped.
     assert c.calls == [("read_lesson", {}), ("press", {})]
     assert s.backend.reported[0][2].skipped
-    assert s.backend.users[1][1] is True and "другая страница" in s.backend.users[1][0]
+    assert s.backend.users[1][1] is True and "practicum.yandex.ru/b" in s.backend.users[1][2]
 
 
 def test_failed_checks_stop_and_new_message_lifts_it():
@@ -137,3 +137,17 @@ def test_repeated_failing_call_is_refused_then_stops():
     assert [n for n, _ in c.calls] == ["press"] * REPEAT_LIMIT
     refused = [r[0] for r in s.backend.reported[REPEAT_LIMIT:]]
     assert len(refused) == LOOP_STOP and all(e.skipped for e in refused)
+
+
+def test_local_model_gets_its_own_prompt_and_the_page():
+    from practicum_bridge.platform_agent import OllamaBackend
+    from practicum_bridge.prompts import LOCAL_SYSTEM
+
+    b = OllamaBackend(lambda k, t: None, "m", "http://127.0.0.1:1", None, 0.2)
+    assert b.system == LOCAL_SYSTEM and "CALL" not in LOCAL_SYSTEM
+    b.messages = [{"role": "system", "content": b.system}]
+    b.user("реши задачу", False, "URL: a")
+    b.user("и ещё", False, "URL: a")
+    b.user("теперь тут", True, "URL: b")
+    first, second, third = (m["content"] for m in b.messages[1:])
+    assert "URL: a" in first and "URL:" not in second and "URL: b" in third

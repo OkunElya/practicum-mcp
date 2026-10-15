@@ -92,6 +92,18 @@ same loop with a local model through Ollama's `/api/chat`; the conversation is k
 and the model may consult Практикум ИИ via `ask_platform_ai`. Ollama's default context is 4k, which
 cuts off the tool list: use a variant from [`models/`](models/) or `--num-ctx 32768`.
 
+Local models don't use Практикум ИИ's text protocol. They get real tool definitions and their own
+English system prompt, `LOCAL_SYSTEM` in
+[`bridge/src/practicum_bridge/prompts.py`](bridge/src/practicum_bridge/prompts.py); `/prompt` in
+the chat shows it. It sets out the trainer workflow:
+- read the exact paths from `read_task`;
+- `set_code` always gets the complete file;
+- verify with `deploy` + `fetch_preview` or `run_code` before `check_task`.
+
+The first message also carries the current page. Compared with the shared prompt on the simulated
+task, it needed fewer checks per run (1.5 vs 1.8) and solved 22/24 runs vs 21/24. gpt-oss makes
+one tool call per reply, so local runs default to 30 rounds.
+
 ## Chatting with the agent
 
 `uv run --directory bridge practicum-chat --model gpt-oss-32k [--think low]` (or `--platform` for

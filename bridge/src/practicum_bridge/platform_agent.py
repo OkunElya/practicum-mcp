@@ -9,9 +9,10 @@ chat per lesson, so after a page change the next message repeats the protocol,
 the task and a log of what was done. Before round 1 the lesson's chat is reset
 (reset_platform_ai_chat, approved by the user) unless --keep-chat is given.
 
-The same loop also drives a local model through Ollama (`practicum-local-agent`):
-the conversation is kept here, so nothing has to be repeated after a page change,
-and the local model may consult Практикум ИИ through ask_platform_ai.
+The same loop also drives a local model through Ollama (`practicum-local-agent`)
+with native tool calling and its own system prompt (prompts.py): the conversation
+is kept here, so nothing has to be repeated after a page change, and the local
+model may consult Практикум ИИ through ask_platform_ai.
 
 A Session keeps one conversation open across several user messages; the
 one-shot commands below send a single task, `practicum-chat` (chat.py) is the
@@ -38,6 +39,7 @@ from pathlib import Path
 from mcp.client import Client
 
 from .call import drop_proxies_for_loopback
+from .prompts import LOCAL_PAGE, LOCAL_SYSTEM, PLATFORM_INTRO
 
 SELF = "ask_platform_ai"
 # Driver-only tools the model must not see or call (dev_* test tools are hidden too).
@@ -54,29 +56,6 @@ LOOP_STOP = 3
 ASK_RETRY_WAIT_S = 70
 CALL_RE = re.compile(r"^\s*CALL\s+(\{.*\})\s*$")
 ANSWER_RE = re.compile(r"^\s*ANSWER:\s*(.*)$", re.S)
-
-INTRO = """\
-Я подключил к своему браузеру расширение, которое даёт ассистенту инструменты для работы с \
-платформой Практикума от моего имени (каждое действие видно мне на странице, необратимые \
-действия я подтверждаю сам). Ты управляешь ими через этот чат.
-
-Инструменты:
-{tools}
-
-Как вызывать: отвечай ТОЛЬКО строками вида
-CALL {{"tool": "<имя>", "args": {{...}}}}
-по одной на строку, без пояснений. Я выполню вызовы по порядку и пришлю результаты.
-Когда задача выполнена (или выполнить её нельзя), напиши одну строку
-ANSWER: <что сделано>
-
-Правила: за один ответ — не больше ОДНОГО действия (ответ на тест, нажатие кнопки, переход); \
-чтения (read_lesson, where_am_i и т. п.) можно добавлять. Остальное я не выполню: сначала \
-посмотри результат. Не придумывай номера блоков и не пиши ANSWER, пока не увидел результаты. Большинство тестов принимают ответ только один раз — сначала прочитай урок \
-(read_lesson) и отвечай, только когда уверен. read_lesson с {{"blocks": true}} показывает только \
-задания с пронумерованными вариантами; в answer_quiz передавай номера вариантов, например "2".
-
-Задача: {task}"""
-
 
 def visible(name: str, hidden: set[str]) -> bool:
     return name not in hidden and not name.startswith("dev_")
@@ -165,21 +144,6 @@ Note = Callable[[str, str], None]
 Stream = Callable[[str, str], None]  # (kind, chunk) for tokens as they arrive; not logged
 INTERRUPTED = "прервано пользователем"
 
-NATIVE_RULES = """\
-Ты управляешь платформой Яндекс Практикума в браузере пользователя через инструменты (tools). \
-Каждое действие видно пользователю на странице, необратимые действия он подтверждает сам.
-
-Правила:
-- За один ответ — не больше ОДНОГО действия (ответ на тест, нажатие кнопки, переход, отправка кода); \
-чтения (read_lesson, where_am_i, get_progress и т. п.) можно добавлять. Лишние вызовы не выполнятся: \
-сначала посмотри результат.
-- Не придумывай номера блоков: бери их из read_lesson (blocks=true показывает только задания \
-с пронумерованными вариантами). В answer_quiz передавай номера вариантов, например "2".
-- Большинство тестов принимают ответ только один раз — отвечай, только когда уверен.
-- Когда задача выполнена (или выполнить её нельзя), ответь обычным текстом без вызовов: \
-кратко, что сделано."""
-
-
 @dataclass
 class Turn:
     calls: list[dict]  # {"tool", "args"}
@@ -220,10 +184,12 @@ class PlatformBackend:
         self.fresh = True
         return not r.is_error
 
-    def user(self, text: str, page_changed: bool) -> None:
+    def user(self, text: str, page_changed: bool, page: str) -> None:
+        url = next((l for l in page.splitlines() if l.startswith("URL:")), "")
+        moved = f"\n\n(Сейчас открыта другая страница: {url})" if page_changed and url else ""
         if self.fresh or page_changed:
             # full() carries the protocol, the (new) task and the log of what was done.
-            self.message = self.full("")
+            self.message = self.full("") + moved
             self.fresh = False
         else:
             self.message = f"Новое сообщение от пользователя:\n{text}\n\nОтвечай как раньше: CALL-строки или ANSWER: ..."
@@ -297,8 +263,9 @@ class OllamaBackend:
         temperature: float,
         think: str | None = None,
         stream: Stream | None = None,
+        system: str = LOCAL_SYSTEM,
     ):
-        self.note, self.base_url, self.think, self.stream = note, base_url.rstrip("/"), think, stream
+        self.note, self.base_url, self.think, self.stream, self.system = note, base_url.rstrip("/"), think, stream, system
         self.options: dict = {"temperature": temperature}
         if num_ctx:
             self.options["num_ctx"] = num_ctx
@@ -337,8 +304,8 @@ class OllamaBackend:
             if visible(t.name, self.hidden)
         ]
         self.ctx = await asyncio.to_thread(self._model_ctx)
-        self.messages = [{"role": "system", "content": NATIVE_RULES}]
-        self.note(f"to {self.name}", f"{len(self.tools)} tools, context {self.ctx or '?'}\n{NATIVE_RULES}")
+        self.messages = [{"role": "system", "content": self.system}]
+        self.note(f"to {self.name}", f"{len(self.tools)} tools, context {self.ctx or '?'}\n{self.system}")
         return True
 
     async def reset(self) -> bool:
@@ -346,7 +313,11 @@ class OllamaBackend:
         self.prompt_tokens = 0
         return True
 
-    def user(self, text: str, page_changed: bool) -> None:
+    def user(self, text: str, page_changed: bool, page: str) -> None:
+        # The page goes with the first message and after a change, which saves a where_am_i round.
+        first = not any(m["role"] == "user" for m in self.messages)
+        if page and (first or page_changed):
+            text += LOCAL_PAGE.format(page=page)
         self.messages.append({"role": "user", "content": text})
 
     def _view(self) -> list[dict]:
@@ -482,6 +453,7 @@ class Session:
         self.errors: dict[tuple, tuple[str, int]] = {}  # call → (its last error, how many times in a row)
         self.refused = 0  # repeats of a failing call that were not run
         self.by_user: list[str] = []  # calls the user made by hand, reported with the next message
+        self.page_text = ""  # the last where_am_i, in full
 
     async def open(self) -> bool:
         self.tools = (await self.client.list_tools()).tools
@@ -492,13 +464,13 @@ class Session:
 
     async def page(self) -> str:
         r = await self.client.call_tool("where_am_i", {})
-        text = text_of(r)
+        text = self.page_text = text_of(r)
         return next((l for l in text.splitlines() if l.startswith("URL:")), text[:200])
 
     def full(self, results: str = "") -> str:
         # For a model without memory of this conversation (the platform chat after a
         # page change, or a lost thread): protocol, task, log of what was done, results.
-        intro = INTRO.format(tools=tool_lines(self.tools, self.backend.hidden), task=self.task)
+        intro = PLATFORM_INTRO.format(tools=tool_lines(self.tools, self.backend.hidden), task=self.task)
         done = "\n\nУже сделано:\n" + "\n".join(self.history[-15:]) if self.history else ""
         latest = f"\n\nРезультаты последних вызовов:\n\n{results}" if results else ""
         return intro + done + latest + "\n\nПродолжай: CALL-строки или ANSWER: ..."
@@ -533,14 +505,12 @@ class Session:
         if self.by_user:
             text = "Я сам выполнил вызовы:\n\n" + "\n\n".join(self.by_user) + "\n\n" + text
             self.by_user = []
-        if changed:
-            text += f"\n\n(Сейчас открыта другая страница: {now})"
         self.task = text
         # A new message from the user lifts the failed-check and loop stops.
         self.failed_checks.clear()
         self.errors.clear()
         self.refused = 0
-        self.backend.user(text, changed)
+        self.backend.user(text, changed, self.page_text)
         return await self.resume(rounds)
 
     async def resume(self, rounds: int) -> Outcome:
@@ -687,6 +657,7 @@ def local_main() -> None:
     p.add_argument("--temperature", type=float, default=0.2, help="0.2 scored best in evals/tune.py")
     p.add_argument("--think", choices=["low", "medium", "high"], help="reasoning effort for models that support it (gpt-oss)")
     p.add_argument("--log", type=Path, default=Path("local-agent.log"))
+    p.set_defaults(rounds=30)  # one tool call per reply: a simple trainer task takes 14-19 rounds
     a = p.parse_args()
     make = lambda client, note: OllamaBackend(note, a.model, a.ollama, a.num_ctx, a.temperature, a.think)  # noqa: E731
     sys.exit(asyncio.run(run(a.task, a.rounds, a.url, a.log, make)))

@@ -15,6 +15,7 @@ run the project with Django (django_probe.py), everything else fails the way it
 would on a trainer page. Results go to evals/results/*.jsonl and a summary table.
 
     uv run python evals/tune.py evals/scenarios/lesson4-broken --temps 0,0.3,0.6,1 --repeats 3
+    uv run python evals/tune.py SCENARIO --system-file old.txt --system-file new.txt   # A/B prompts
 """
 
 import argparse
@@ -206,12 +207,13 @@ class SimClient:
         return result("Page: theory lesson\nURL: https://practicum.yandex.ru/learn/next-lesson/\n(The simulation ends here.)")
 
 
-async def run_one(scenario: Path, model: str, ollama: str, temperature: float, think, rounds: int, seed: int, num_ctx, transcript: Path) -> dict:
+async def run_one(scenario: Path, model: str, ollama: str, temperature: float, think, rounds: int, seed: int, num_ctx, transcript: Path, prompt: tuple[str, str | None]) -> dict:
     events: list[tuple[str, str]] = []
     note = lambda kind, text: events.append((kind, text))  # noqa: E731
     with tempfile.TemporaryDirectory(prefix="sim-") as tmp:
         client = SimClient(scenario, Path(tmp))
-        backend = OllamaBackend(note, model, ollama, num_ctx, temperature, think)
+        label, system = prompt
+        backend = OllamaBackend(note, model, ollama, num_ctx, temperature, think, **({"system": system} if system else {}))
         backend.options["seed"] = seed
         session = Session(client, backend, note)
         t0 = time.monotonic()
@@ -223,6 +225,7 @@ async def run_one(scenario: Path, model: str, ollama: str, temperature: float, t
     acted = [(n, e) for n, a, e in client.log if n != "where_am_i"]
     return {
         "scenario": scenario.name,
+        "prompt": label,
         "model": model,
         "temperature": temperature,
         "think": think,
@@ -243,12 +246,12 @@ async def run_one(scenario: Path, model: str, ollama: str, temperature: float, t
 
 
 def summary(rows: list[dict]) -> str:
-    out = ["temp  runs  solved  checks/run  rounds/run  tool-err/run  off-format  sec/run"]
-    for t in sorted({r["temperature"] for r in rows}):
-        rs = [r for r in rows if r["temperature"] == t]
+    out = ["prompt        temp  runs  solved  checks/run  rounds/run  tool-err/run  off-format  sec/run"]
+    for p, t in sorted({(r.get("prompt", "default"), r["temperature"]) for r in rows}):
+        rs = [r for r in rows if r.get("prompt", "default") == p and r["temperature"] == t]
         avg = lambda k: statistics.mean(r[k] for r in rs)  # noqa: E731
         out.append(
-            f"{t:<5} {len(rs):<5} {sum(r['solved'] for r in rs)}/{len(rs):<6} {avg('checks'):<11.1f} {avg('rounds'):<11.1f} "
+            f"{p[:13]:<13} {t:<5} {len(rs):<5} {sum(r['solved'] for r in rs)}/{len(rs):<6} {avg('checks'):<11.1f} {avg('rounds'):<11.1f} "
             f"{avg('tool_errors'):<13.1f} {sum(r['off_format'] for r in rs):<11} {avg('seconds'):.0f}"
         )
     return "\n".join(out)
@@ -261,15 +264,16 @@ async def amain(a) -> None:
     temps = [float(t) for t in a.temps.split(",")]
     rows = []
     # Interleave temperatures so a slow stretch on the GPU doesn't bias one of them.
-    plan = [(sc, t, i) for i in range(a.repeats) for sc in a.scenario for t in temps]
-    for n, (sc, t, i) in enumerate(plan, 1):
-        transcript = path.with_suffix("") / f"{n:03d}-{Path(sc).name}-T{t}.log"
+    prompts = [(f.stem, f.read_text()) for f in a.system_file] or [("default", None)]
+    plan = [(sc, t, i, pr) for i in range(a.repeats) for sc in a.scenario for t in temps for pr in prompts]
+    for n, (sc, t, i, pr) in enumerate(plan, 1):
+        transcript = path.with_suffix("") / f"{n:03d}-{Path(sc).name}-{pr[0]}-T{t}.log"
         transcript.parent.mkdir(exist_ok=True)
-        row = await run_one(Path(sc), a.model, a.ollama, t, a.think, a.rounds, a.seed + i, a.num_ctx, transcript)
+        row = await run_one(Path(sc), a.model, a.ollama, t, a.think, a.rounds, a.seed + i, a.num_ctx, transcript, pr)
         rows.append(row)
         with path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(f"[{n}/{len(plan)}] {row['scenario']} T={t} seed={row['seed']}: {'SOLVED' if row['solved'] else 'not solved'}, "
+        print(f"[{n}/{len(plan)}] {row['scenario']} {pr[0]} T={t} seed={row['seed']}: {'SOLVED' if row['solved'] else 'not solved'}, "
               f"{row['checks']} checks, {row['rounds']} rounds, {row['tool_errors']} tool errors, {row['seconds']} s", flush=True)
     print(f"\n{summary(rows)}\n\nresults: {path}")
 
@@ -279,7 +283,8 @@ def main() -> None:
     p.add_argument("scenario", nargs="+", help="scenario directories")
     p.add_argument("--model", default="gpt-oss-32k")
     p.add_argument("--ollama", default="http://127.0.0.1:11434")
-    p.add_argument("--temps", default="0,0.3,0.6,1")
+    p.add_argument("--temps", default="0.2")
+    p.add_argument("--system-file", type=Path, action="append", default=[], help="system prompt to try instead of the built-in one; repeat to compare")
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--rounds", type=int, default=25)
     p.add_argument("--think", choices=["low", "medium", "high"])

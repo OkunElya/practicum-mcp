@@ -44,6 +44,7 @@ Commands:
 A line ending with \\ continues on the next line. Ctrl+C stops the current run."""
 
 OLLAMA_HELP = """
+  /prompt                 the system prompt the model works with (prompts.py)
   /model NAME             switch the Ollama model (the conversation is kept)
   /think low|medium|high|off|default   reasoning effort
   /temp X                 sampling temperature"""
@@ -214,6 +215,8 @@ class Chat:
                 say(f"verbose {'on' if self.console.verbose else 'off'}")
             case "log":
                 say(str(self.console.log_path.resolve()))
+            case "prompt" if ollama:
+                print(self.backend.system)
             case "model" if ollama:
                 if rest:
                     await self.backend.set_model(rest)
@@ -296,7 +299,8 @@ async def amain(a: argparse.Namespace) -> int:
         session = Session(client, backend, console)
         if not await session.open():
             return 1
-        await Chat(session, console, a.rounds).loop()
+        # gpt-oss makes one call per reply: a simple trainer task takes 14-19 rounds.
+        await Chat(session, console, a.rounds or (10 if a.platform else 30)).loop()
     return 0
 
 
@@ -305,7 +309,7 @@ def main() -> None:
     who = p.add_mutually_exclusive_group(required=True)
     who.add_argument("--model", help="Ollama model, e.g. gpt-oss-32k")
     who.add_argument("--platform", action="store_true", help="let Практикум ИИ drive through its chat")
-    p.add_argument("--rounds", type=int, default=15, help="round limit per message")
+    p.add_argument("--rounds", type=int, help="round limit per message (default: 30 for local models, 10 for Практикум ИИ)")
     p.add_argument("--url", default="http://127.0.0.1:8766/mcp", help="the bridge's MCP endpoint")
     p.add_argument("--log", type=Path, default=Path("chat.log"))
     p.add_argument("--verbose", action="store_true", help="print every event in full")
