@@ -12,6 +12,13 @@ import os
 import sys
 import traceback
 
+# The real checker's wording (lesson 4, October 2026).
+BINDING = (
+    "Убедитесь, что в файле `{file}` url `{path}` привязан ко view-функции `{name}` из модуля `{module}`. "
+    "Помните, что при подключении файла urls.py функцией include ко всем url-ам этого файла добавляется префикс. "
+    "Префикс в данном случае совпадает с именем приложения, для которого подключаются url-ы."
+)
+
 
 def tail(tb: str, n: int = 12) -> str:
     return "\n".join(tb.strip().splitlines()[-n:])
@@ -29,7 +36,7 @@ def main() -> None:
 
         django.setup()
         from django.test import Client
-        from django.urls import Resolver404, resolve
+        from django.urls import resolve
     except Exception:
         print(json.dumps({"setup_error": tail(traceback.format_exc())}))
         return
@@ -53,15 +60,13 @@ def main() -> None:
             try:
                 m = resolve(path)
                 actual = f"{m.func.__module__}.{m.func.__name__}"
-            except Resolver404:
+            except Exception:
+                # Resolver404 or a URLconf that doesn't import: the platform's checker
+                # reports both as a wrong binding (seen on the real task).
                 actual = None
-            except Exception as e:
-                # The URLconf itself fails to import: that's what the student has to see.
-                print(json.dumps({"solved": False, "message": f"Проект не запускается: {type(e).__name__}: {e}"}))
-                return
             if actual != view:
                 module, name = view.rsplit(".", 1)
-                print(json.dumps({"solved": False, "message": f"Убедитесь, что в файле `{page['urls_file']}` url `{path}` привязан ко view-функции `{name}`."}))
+                print(json.dumps({"solved": False, "message": BINDING.format(file=page["urls_file"], path=path, name=name, module=module)}))
                 return
         r = get(path)
         if r["status"] != 200:
