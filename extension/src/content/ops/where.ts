@@ -1,4 +1,5 @@
 import { byTestId, isVisible, plain, state, text } from '../page';
+import { theoryOpen } from './trainer';
 
 export type PageKind = 'profile' | 'lesson' | 'trainer' | 'other';
 
@@ -33,6 +34,8 @@ export interface WhereInfo {
   storeFound: boolean;
   /** The page's main content has rendered (lesson blocks, editor, course grid). */
   contentReady: boolean;
+  /** The lesson theory is shown as a window over the trainer. */
+  theoryOpen: boolean;
 }
 
 /** Buttons that matter to tools, by test-id (see docs/actions.md). */
@@ -110,9 +113,13 @@ export function where(): WhereInfo {
       kind === 'lesson'
         ? !!document.querySelector('[class*="theory-viewer__block"]')
         : kind === 'trainer'
-          ? !!document.querySelector('.monaco-editor, [class*="theory-viewer__block"]')
+          ? // a task is ready once its editor exists (it loads a while after the theory window)
+            path.includes('/task/')
+            ? !!document.querySelector('.monaco-editor')
+            : !!document.querySelector('[class*="theory-viewer__block"]')
           : kind === 'profile'
             ? !!document.querySelector('.course-card')
             : true,
+    theoryOpen: theoryOpen(),
   };
 }

@@ -25,7 +25,13 @@ export async function waitForPage(ctx: ToolContext, what: string, ok: (w: WhereI
     return w.storeFound && w.contentReady && ok(w);
   }, timeoutMs);
   await sleep(SETTLE_MS, ctx.signal);
-  const w = await ctx.page.op<WhereInfo>('where');
+  let w = await ctx.page.op<WhereInfo>('where');
+  if (w.kind === 'trainer' && w.theoryOpen) {
+    // Opening a task can show the lesson theory as a window over the trainer; it hides the editor.
+    await ctx.page.op('closeTheory');
+    ctx.step('closed the theory window over the trainer');
+    w = await ctx.page.op<WhereInfo>('where');
+  }
   if (w.kind !== 'lesson') return w;
   // The bottom button and its label render last; lessons with an unanswered
   // blocking quiz have none, so this is a short best-effort wait.
@@ -48,9 +54,15 @@ export const openLesson: Tool = {
     const tasks = lesson.tasks ?? [];
     const task = tasks.find((t) => !t.solved) ?? tasks[0];
     // "Already open" only counts for the right view: a practice lesson's theory page isn't its trainer.
-    if (here.lesson?.id === id && (!task || here.kind === 'trainer')) return `Already open.\n${formatWhere(here)}`;
+    if (here.lesson?.id === id && (!task || here.kind === 'trainer')) {
+      if (here.theoryOpen) {
+        await ctx.page.op('closeTheory');
+        ctx.step('closed the theory window over the trainer');
+      }
+      return `Already open.\n${formatWhere(await ctx.page.op<WhereInfo>('where'))}`;
+    }
     const url = task
-      ? `https://practicum.yandex.ru/trainer/${slug}/lesson/${id}/task/${task.id}/`
+      ? `https://practicum.yandex.ru/trainer/${slug}/lesson/${id}/task/${task.id}/?hideTheory=1`
       : `https://practicum.yandex.ru/learn/${slug}/courses/${lesson.course_id}/sprints/${lesson.sprint_id}/topics/${lesson.topic_id}/lessons/${id}/`;
     ctx.step(`opening «${lesson.name}»${task ? ` at task ${tasks.indexOf(task) + 1}/${tasks.length}` : ''}`);
     await navigate(ctx, url);

@@ -83,7 +83,29 @@ const BUTTONS: Record<string, () => Element | null> = {
   prev: () => byText(/^Предыдущее задание$/),
 };
 
+const THEORY = '.theory-panel__modal-overlay .theory-panel__theory_visible';
+
+/** The lesson theory shown as a window over the trainer (when a task is opened without ?hideTheory=1). */
+export function theoryOpen(): boolean {
+  return isVisible(document.querySelector(THEORY));
+}
+
+/** Close the theory window: its bottom button, or the ✕ at the top. */
+export async function closeTheory(): Promise<boolean> {
+  if (!theoryOpen()) return false;
+  const overlay = document.querySelector('.theory-panel__modal-overlay')!;
+  const btn =
+    [...overlay.querySelectorAll<HTMLElement>('[data-test-id="theory-panel-close-button"]')].find(isVisible) ??
+    [...overlay.querySelectorAll<HTMLElement>('[data-test-id="modal-button-close"]')].find(isVisible);
+  if (!btn) throw new ToolError('the theory window has no close button');
+  await press(btn, 'close theory');
+  for (let i = 0; i < 30 && theoryOpen(); i++) await sleep(100);
+  if (theoryOpen()) throw new ToolError('the theory window did not close');
+  return true;
+}
+
 export async function trainerPress({ button, label }: { button: string; label: string }): Promise<true> {
+  await closeTheory(); // it covers the trainer's buttons
   const el = BUTTONS[button]?.();
   if (!el || !isVisible(el)) throw new ToolError(`the «${label}» button is not on the page`);
   if ((el as HTMLButtonElement).disabled) throw new ToolError(`the «${label}» button is disabled (something is still running?)`);
@@ -153,6 +175,7 @@ function storedPane(path: string): string | null {
 }
 
 export async function setCode({ file, code }: { file?: string; code: string }): Promise<{ file: string; previousLength: number }> {
+  await closeTheory(); // it covers the editor and the file tree
   let model = findModel(file);
   if (!model && file) model = await openFile(file);
   if (!model) throw new ToolError('no editor model found');

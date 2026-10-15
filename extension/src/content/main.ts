@@ -4,7 +4,7 @@ import { highlight, initHud, renderHud } from './hud';
 import { press } from './input';
 import { code, lesson, progress, task } from './ops/read';
 import { blockElement, pressActionButton, pressTestId, quizState, quizStep, renderedBlocks, type BlockRef } from './ops/theory';
-import { lessonTasks, setCode, trainerPress, trainerState } from './ops/trainer';
+import { closeTheory, lessonTasks, setCode, trainerPress, trainerState } from './ops/trainer';
 import { aiClose, aiNewChat, aiOpen, aiSend, aiState } from './ops/ai';
 import { chatQuizAnswer, chatQuizNext, chatQuizState } from './ops/chatquiz';
 import { codingPress, codingReset, codingSetCode, codingState } from './ops/coding';
@@ -31,6 +31,7 @@ const OPS: Record<string, (args: any) => unknown> = {
   trainerPress,
   setCode,
   lessonTasks,
+  closeTheory,
   aiState,
   aiOpen,
   aiSend,

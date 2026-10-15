@@ -29,6 +29,7 @@ export function formatWhere(w: WhereInfo): string {
   }
   if (w.task) lines.push(`Current task: ${w.task.index + 1} id=${w.task.id}, ${w.task.solved ? 'solved' : 'not solved'}`);
   if (w.modal) lines.push(`Open dialog: ${w.modal}`);
+  if (w.theoryOpen) lines.push('The lesson theory is shown as a window over the trainer (trainer tools close it first).');
   if (w.aiChatOpen) lines.push('Platform AI chat: open');
   if (w.controls.length) {
     lines.push('Buttons on screen:');
