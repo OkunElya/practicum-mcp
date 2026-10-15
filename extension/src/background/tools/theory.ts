@@ -1,6 +1,6 @@
 import type { BlockRef, QuizStep } from '../../content/ops/theory';
 import { describePlan, planAnswer, type QuizPlan } from '../../shared/answers';
-import { chatQuestions, findBlock, interactiveBlocks, type InteractiveBlock, type LessonJson, type SavedAnswer } from '../../shared/lesson';
+import { blockersOf, chatQuestions, findBlock, hiddenMessage, interactiveBlocks, type InteractiveBlock, type LessonJson, type SavedAnswer } from '../../shared/lesson';
 import { ToolError } from '../../shared/protocol';
 import { sleep } from '../page';
 import type { Tool, ToolContext } from '../router';
@@ -36,12 +36,20 @@ export async function onBlock<T>(ctx: ToolContext, b: InteractiveBlock, fn: () =
   } catch (e) {
     if (!(e instanceof ToolError) || !e.message.startsWith('this block is not on the page')) throw e;
     const { blocks } = await currentLesson(ctx);
-    const i = blocks.findIndex((x) => x.nodeId === b.nodeId);
-    const before = blocks.slice(0, Math.max(i, 0)).filter((x) => !x.answer && (x.type === 'ActionButton' || x.node.content?.blocking));
+    const before = blockersOf(blocks, blocks.find((x) => x.nodeId === b.nodeId) ?? b);
     if (!before.length) throw e;
-    const how = (x: InteractiveBlock) => (x.type === 'ActionButton' ? `press_action_button block=${x.ref} («${x.node.content?.text ?? 'button'}»)` : `${x.ref} ${x.type}`);
-    throw new ToolError(`${b.ref} is still hidden on the page: first deal with ${before.map(how).join(', ')}, then try ${b.ref} again`);
+    throw new ToolError(hiddenMessage(b, before));
   }
+}
+
+/**
+ * Refuse a block that is still behind an earlier button or blocking quiz. Called from
+ * describe() too, so the user isn't asked to approve an action that can't work.
+ */
+export async function inOrder(ctx: ToolContext, b: InteractiveBlock): Promise<void> {
+  const { blocks } = await currentLesson(ctx);
+  const before = blockersOf(blocks, blocks.find((x) => x.nodeId === b.nodeId) ?? b);
+  if (before.length) throw new ToolError(hiddenMessage(b, before));
 }
 
 export const fingerprint = (a: SavedAnswer | undefined) => JSON.stringify(a ? [a.user_answer, a.attempts_count ?? 0] : null);
@@ -65,6 +73,7 @@ export const pressActionButton: Tool = {
   spec: spec('press_action_button'),
   async describe(args, ctx) {
     const { lesson, block: b } = await block(ctx, args.block);
+    if (b.type === 'ActionButton' && !b.answer) await inOrder(ctx, b);
     return `Press «${b.node.content?.text ?? 'button'}» (${b.ref}) in «${lesson.name}»`;
   },
   async run(args, ctx) {
@@ -168,10 +177,26 @@ async function answerChat(ctx: ToolContext, b: InteractiveBlock, answer: string)
   return lines.join('\n');
 }
 
+/**
+ * Multiple-choice results don't show up as marks we can read, but the page grades them in the
+ * browser from the lesson's own key, so the verdict can be computed the same way after submitting.
+ */
+function selectVerdict(b: InteractiveBlock, chosen: string[]): string {
+  const opts: any[] = b.node.content?.options ?? [];
+  const right = opts.filter((o) => o.correct).map((o) => o.id);
+  if (!right.length) return 'Verdict: this question has no right answer (a poll); any answer counts.';
+  const good = chosen.filter((id) => right.includes(id)).length;
+  const bad = chosen.length - good;
+  const missed = b.node.content?.type === 'checkbox' ? right.filter((id) => !chosen.includes(id)).length : 0;
+  const ok = b.node.content?.type === 'checkbox' ? bad === 0 && missed === 0 : good === 1;
+  return `Verdict (the lesson's own key, as the page grades it): ${ok ? 'correct' : 'not correct'} — ${good} right pick(s), ${bad} wrong${missed ? `, ${missed} right option(s) not picked` : ''}.`;
+}
+
 export const answerQuiz: Tool = {
   spec: spec('answer_quiz'),
   async describe(args, ctx) {
     const { lesson, block: b } = await block(ctx, args.block);
+    await inOrder(ctx, b);
     if (b.type === 'QuizChat') {
       const st = await chatState(ctx, b);
       if (st.next) return `Chat quiz ${b.ref} of «${lesson.name}»: press «Далее», then reply «${args.answer}» to the next question`;
@@ -210,7 +235,8 @@ export const answerQuiz: Tool = {
         return st.answered && st.correct + st.incorrect > 0 ? st : null;
       }, 3000, 300)
       .catch(() => ctx.page.op<Shown>('quizState', { block: ref }));
-    const marks = shown.correct + shown.incorrect ? `\nThe page marks ${shown.correct} correct, ${shown.incorrect} incorrect.` : '';
+    let marks = shown.correct + shown.incorrect ? `\nThe page marks ${shown.correct} correct, ${shown.incorrect} incorrect.` : '';
+    if (!marks && plan.type === 'QuizSelect') marks = `\n${selectVerdict(b, plan.optionIds)}`;
     return `Answer to ${b.ref} submitted.${marks}\nThe quiz now shows:\n${shown.text}`;
   },
 };

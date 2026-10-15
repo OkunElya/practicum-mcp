@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from practicum_bridge.platform_agent import INTERRUPTED, LOOP_STOP, MAX_FAILED_CHECKS, REPEAT_LIMIT, Session, Turn, clean_args
+from practicum_bridge.platform_agent import INTERRUPTED, LOOP_STOP, MAX_FAILED_CHECKS, REPEAT_LIMIT, Session, Turn, clean_args, looks_patterned
 
 
 def tool(name, read_only=False):
@@ -57,9 +57,10 @@ class FakeBackend:
         self.reported.append(done)
 
 
-def make(turns, **client):
+def make(turns, read=True, **client):
     c = FakeClient(**client)
     s = Session(c, FakeBackend(turns), lambda kind, text: None)
+    s.must_read = not read  # most tests start as if the page had been read; test_read_first doesn't
     return c, s
 
 
@@ -210,3 +211,62 @@ def test_recheck_without_changes_is_refused():
     assert asyncio.run(go()).code == 0
     # The second check was refused (nothing changed); after an edit checking is allowed again.
     assert [n for n, _ in c.calls] == ["check_task", "press", "check_task"]
+
+
+
+def test_read_first_at_start_and_after_a_page_change():
+    act = Turn([{"tool": "check_task", "args": {}}], None, [])
+    read = Turn([{"tool": "read_lesson", "args": {}}], None, [])
+    c, s = make([act, read, act, act, read, act, Turn([], "ok", [])], read=False, replies={"check_task": "Solved"})
+
+    async def go():
+        await s.open()
+        real = c.call_tool
+
+        async def call_tool(name, args):  # the first check that runs moves to another page
+            if name == "check_task" and not any(n == "check_task" for n, _ in c.calls):
+                c.url = "URL: https://practicum.yandex.ru/next"
+            return await real(name, args)
+
+        c.call_tool = call_tool
+        return await s.ask("go", 10)
+
+    assert asyncio.run(go()).code == 0
+    # Refused before reading; run after; refused again after the page changed; run after reading it.
+    assert [n for n, _ in c.calls] == ["read_lesson", "check_task", "read_lesson", "check_task"]
+
+
+def test_patterned_answers_are_questioned_once():
+    assert looks_patterned("1=A; 2=B; 3=C; 4=D") and looks_patterned("1,2,3,4") and looks_patterned("12345678910")
+    assert not looks_patterned("1=B; 2=A; 3=C") and not looks_patterned("2, 4") and not looks_patterned("13486")
+    pattern = Turn([{"tool": "answer_quiz", "args": {"block": "q1", "answer": "1=A; 2=B; 3=C"}}], None, [])
+    c, s = make([pattern, pattern, Turn([], "ok", [])])
+
+    async def go():
+        tools = (await FakeClient().list_tools()).tools + [SimpleNamespace(name="answer_quiz", description="", input_schema={}, annotations=SimpleNamespace(read_only_hint=False))]
+        c.list_tools = lambda: _tools(tools)
+        await s.open()
+        s.must_read = False
+        return await s.ask("answer", 10)
+
+    async def _tools(t):
+        return SimpleNamespace(tools=t)
+
+    assert asyncio.run(go()).code == 0
+    assert [n for n, _ in c.calls] == ["answer_quiz"]  # refused once, sent again, then run
+
+
+
+def test_reading_the_open_lesson_by_id_counts_as_reading_it():
+    lesson = "0b1f8810-09b3-4f94-9820-8f3ffc6a018b"
+    read = Turn([{"tool": "read_lesson", "args": {"lesson": lesson}}], None, [])
+    act = Turn([{"tool": "check_task", "args": {}}], None, [])
+    c, s = make([read, act, Turn([], "ok", [])], read=False, replies={"read_lesson": f"Lesson «X» [web] id={lesson}, not solved", "check_task": "Solved"})
+    c.url = f"URL: https://practicum.yandex.ru/learn/x/lessons/{lesson}/\nLesson 1/1: «X» [web] id={lesson}, not solved"
+
+    async def go():
+        await s.open()
+        return await s.ask("go", 5)
+
+    assert asyncio.run(go()).code == 0
+    assert [n for n, _ in c.calls] == ["read_lesson", "check_task"]

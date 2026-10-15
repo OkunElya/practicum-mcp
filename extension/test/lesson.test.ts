@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findBlock, interactiveBlocks, renderLesson, type LessonJson, type SavedAnswer } from '../src/shared/lesson';
+import { blockersOf, findBlock, hiddenMessage, interactiveBlocks, renderLesson, type LessonJson, type SavedAnswer } from '../src/shared/lesson';
 import { chatQuestions } from '../src/shared/lesson';
 
 // Shapes copied from real lessons (docs/platform-findings.md §4), ids shortened.
@@ -142,5 +142,31 @@ describe('QuizChat', () => {
     expect(text).toMatch(/Question 1: Q one\?\n {2}1\. right\n {2}2\. wrong/);
     expect(text).toContain('On screen now: bot: Q one?');
     expect(text).not.toMatch(/SECRET|isValid|true|false/);
+  });
+});
+
+describe('blocks hidden behind a button', () => {
+  const gated = {
+    id: 'l2', name: 'Gated', lesson_type: 'web', solved: false,
+    theory: {
+      id: 'root', type: 'RootLayout', content: {},
+      nested: [
+        { id: 'b1', type: 'ActionButton', content: { id: 'btn', text: 'Дальше' } },
+        { id: 'b2', type: 'QuizSelect', content: { id: 'qs', type: 'radio', content: 'Q?', options: [{ id: 'o1', content: 'A' }, { id: 'o2', content: 'B' }] } },
+      ],
+    },
+  } as unknown as LessonJson;
+
+  it('marks the quiz as hidden until the button is pressed, and lists the button to press', () => {
+    expect(renderLesson(gated, [])).toContain('[q2 · single choice · not answered · hidden until q1 is done]');
+    const blocks = interactiveBlocks(gated.theory, []);
+    expect(hiddenMessage(blocks[1], blockersOf(blocks, blocks[1]))).toContain('press_action_button block=q1 («Дальше»)');
+  });
+
+  it('shows it once the button was pressed', () => {
+    const pressed = [{ content_quiz_id: 'expander-btn', user_answer: {} }] as SavedAnswer[];
+    expect(renderLesson(gated, pressed)).not.toContain('hidden until');
+    const blocks = interactiveBlocks(gated.theory, pressed);
+    expect(blockersOf(blocks, blocks[1])).toEqual([]);
   });
 });

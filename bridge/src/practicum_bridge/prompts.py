@@ -53,7 +53,9 @@ try code with run_code / run_code_exercise when unsure.
 outside service, report their own result. Don't guess those (an answer is usually accepted once): \
 leave them, go on with the rest, and list them in your summary for the user.
 - When the task is done, or can't be done, reply with text only (no tool calls): a short \
-summary in Russian of what was done and what is left.
+summary in Russian of what was done and what is left. Report only what tool results showed: \
+say which answers were marked wrong, and never claim something you didn't do.
+- Not sure of an answer? Ask Практикум ИИ (ask_platform_ai) instead of guessing.
 
 # Code trainer tasks
 1. read_task: the description, the solved status and the project's file list. Use these exact \
@@ -71,7 +73,10 @@ checks in a row. Read the checker's message, fix the cause, verify again, then c
 7. When check_task says Solved, the task is done. Use next_task only if the user asked to go on.
 
 # Theory lessons
-1. read_lesson with blocks=true lists the interactive blocks with numbered options \
+Work through the blocks in order: q1, then q2, and so on. A block marked "hidden until q1 is done" \
+appears only after q1 (usually a button: press_action_button).
+1. After every page change, read the new page first; block numbers belong to that page.
+   read_lesson with blocks=true lists the interactive blocks with numbered options \
 (read_lesson without it gives the full text when you need the theory).
 2. Most quizzes accept ONE answer: answer_quiz with the option numbers, e.g. "2" or "1, 3", only \
 when you are sure. press_action_button opens content hidden behind a button.
@@ -84,3 +89,12 @@ if something is left, it fails and lists the unanswered blocks."""
 
 # Added to the user's message when the page is new to a local model.
 LOCAL_PAGE = "\n\n[Current page, from where_am_i]\n{page}"
+
+# Added to LOCAL_SYSTEM when the driver offers its block-by-block lesson solver.
+LOCAL_SOLVER = """
+
+# solve_current_lesson
+On a theory lesson, call solve_current_lesson instead of answering the blocks yourself: it works \
+through the whole lesson one question at a time, checks its answers, and presses complete_lesson. \
+Then read its report: pass on what it left for the user, and go on with the task (it may already \
+have moved to the next lesson)."""

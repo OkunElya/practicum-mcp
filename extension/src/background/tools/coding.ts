@@ -4,7 +4,7 @@ import { ToolError } from '../../shared/protocol';
 import { sleep } from '../page';
 import type { Tool, ToolContext } from '../router';
 import { spec } from './spec';
-import { block, currentLesson, fingerprint, onBlock, refOf } from './theory';
+import { block, currentLesson, fingerprint, inOrder, onBlock, refOf } from './theory';
 
 const RETRIES = 3;
 const PLATFORM_ERROR = /Неизвестная ошибка|\b\d{3}\.[a-zA-Z]+|took too long|timeout occur/i;
@@ -78,6 +78,7 @@ export const checkCodeExercise: Tool = {
   async describe(args, ctx) {
     const { lessonName, b } = await codingBlock(ctx, args.block);
     if (!graded(b)) throw new ToolError(`${b.ref} is a runnable example without tests; use run_code_exercise`);
+    await inOrder(ctx, b);
     return `Check code exercise ${b.ref} in «${lessonName}»${args.code ? ' with new code' : ''} (counts as an attempt)`;
   },
   async run(args, ctx) {

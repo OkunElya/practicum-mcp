@@ -296,7 +296,17 @@ async def amain(a: argparse.Namespace) -> int:
         else:
             backend = OllamaBackend(console, a.model, a.ollama, a.num_ctx, a.temperature, a.think, None if a.no_stream else console.stream)
         console.model_kinds.add(backend.name)
-        session = Session(client, backend, console)
+
+        async def ask_user(ref: str, block: str, candidates: list[str]) -> str | None:
+            console._end_stream()
+            print(console.paint("1;33", f"\nThe lesson solver isn't sure about {ref}:"))
+            print(block[:2500])
+            if candidates:
+                print(console.paint("2", "Model's candidates: " + " / ".join(f"«{c}»" for c in candidates)))
+            line = await asyncio.to_thread(input, f"Your answer for {ref} (as for answer_quiz; Enter to leave it): ")
+            return line.strip() or None
+        session = Session(client, backend, console, solver=not a.no_solver)
+        session.ask_user = ask_user
         if not await session.open():
             return 1
         # gpt-oss makes one call per reply: a simple trainer task takes 14-19 rounds.
@@ -319,6 +329,7 @@ def main() -> None:
     p.add_argument("--temperature", type=float, default=0.2, help="0.2 scored best in evals/tune.py")
     p.add_argument("--think", choices=["low", "medium", "high", "off"], help="reasoning effort for models that support it")
     p.add_argument("--no-stream", action="store_true", help="show replies when complete instead of token by token")
+    p.add_argument("--no-solver", action="store_true", help="don't offer solve_current_lesson (block-by-block lesson solver)")
     a = p.parse_args()
     setup_readline()
     try:

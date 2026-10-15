@@ -408,7 +408,7 @@ class LessonSim(BaseSim):
                 before.append(x)
         if before:
             how = lambda x: f"press_action_button block={x['ref']} («{(self.node(x['nodeId']).get('content') or {}).get('text', 'button')}»)" if x["type"] == "ActionButton" else f"{x['ref']} {x['type']}"  # noqa: E731
-            raise SimError(f"{b['ref']} is still hidden on the page: first deal with {', '.join(how(x) for x in before)}, then try {b['ref']} again")
+            raise SimError(f"{b['ref']} is still hidden on the page: first deal with {', '.join(how(x) for x in before)}, then try {b['ref']} again (blocks go in order)")
 
     # -- read tools
 

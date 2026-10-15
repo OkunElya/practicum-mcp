@@ -39,7 +39,7 @@ TASKS = {
 ROUNDS = {"trainer": 30, "lesson": 40, "journey": 150}
 
 
-async def run_one(scenario: Path, model: str, ollama: str, temperature: float, think, rounds: int, seed: int, num_ctx, transcript: Path, prompt: tuple[str, str | None]) -> dict:
+async def run_one(scenario: Path, model: str, ollama: str, temperature: float, think, rounds: int, seed: int, num_ctx, transcript: Path, prompt: tuple[str, str | None], solver: bool = True) -> dict:
     events: list[tuple[str, str]] = []
     note = lambda kind, text: events.append((kind, text))  # noqa: E731
     with tempfile.TemporaryDirectory(prefix="sim-") as tmp:
@@ -47,7 +47,7 @@ async def run_one(scenario: Path, model: str, ollama: str, temperature: float, t
         label, system = prompt
         backend = OllamaBackend(note, model, ollama, num_ctx, temperature, think, **({"system": system} if system else {}))
         backend.options["seed"] = seed
-        session = Session(client, backend, note)
+        session = Session(client, backend, note, solver)
         t0 = time.monotonic()
         await session.open()
         out = await session.ask(TASKS[client.kind], rounds or ROUNDS[client.kind])
@@ -57,7 +57,7 @@ async def run_one(scenario: Path, model: str, ollama: str, temperature: float, t
     acted = [(n, e) for n, a, e in client.log if n != "where_am_i"]
     return {
         "scenario": scenario.name,
-        "prompt": label,
+        "prompt": label + ("" if solver else "-nosolver"),
         "model": model,
         "temperature": temperature,
         "think": think,
@@ -112,7 +112,7 @@ async def amain(a) -> None:
     for n, (sc, t, i, pr) in enumerate(plan, 1):
         transcript = path.with_suffix("") / f"{n:03d}-{Path(sc).name}-{pr[0]}-T{t}.log"
         transcript.parent.mkdir(exist_ok=True)
-        row = await run_one(Path(sc), a.model, a.ollama, t, a.think, a.rounds, a.seed + i, a.num_ctx, transcript, pr)
+        row = await run_one(Path(sc), a.model, a.ollama, t, a.think, a.rounds, a.seed + i, a.num_ctx, transcript, pr, not a.no_solver)
         rows.append(row)
         with path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -134,6 +134,7 @@ def main() -> None:
     p.add_argument("--num-ctx", type=int)
     p.add_argument("--seed", type=int, default=random.randrange(10_000))
     p.add_argument("--summary", type=Path, help="only print the summary of a results file")
+    p.add_argument("--no-solver", action="store_true", help="run without solve_current_lesson")
     a = p.parse_args()
     if a.summary:
         rows = [json.loads(l) for l in a.summary.read_text().splitlines() if l.strip()]

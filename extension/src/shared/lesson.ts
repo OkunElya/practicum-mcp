@@ -83,6 +83,20 @@ export function findBlock(blocks: InteractiveBlock[], ref: string): InteractiveB
   return undefined;
 }
 
+/** Gates on the page: an unanswered button or blocking quiz hides everything after it. */
+const gates = (b: InteractiveBlock) => !b.answer && (b.type === 'ActionButton' || !!b.node.content?.blocking);
+
+/** The earlier blocks that keep `b` hidden on the page, in order (empty when it is shown). */
+export function blockersOf(blocks: InteractiveBlock[], b: InteractiveBlock): InteractiveBlock[] {
+  const i = blocks.findIndex((x) => x.nodeId === b.nodeId);
+  return blocks.slice(0, Math.max(i, 0)).filter(gates);
+}
+
+export function hiddenMessage(b: InteractiveBlock, before: InteractiveBlock[]): string {
+  const how = (x: InteractiveBlock) => (x.type === 'ActionButton' ? `press_action_button block=${x.ref} («${String(x.node.content?.text ?? 'button').trim()}»)` : `${x.ref} ${x.type}`);
+  return `${b.ref} is still hidden on the page: first deal with ${before.map(how).join(', ')}, then try ${b.ref} again (blocks go in order)`;
+}
+
 export const letter = (i: number) => String.fromCharCode(65 + i); // A, B, C…
 
 /** Text of an option/choice that may be a string or {content}. */
@@ -128,9 +142,18 @@ export function chatQuestions(content: any): ChatQuestion[] {
   return out;
 }
 
-function renderInteractive(b: InteractiveBlock, out: string[]): void {
+function renderInteractive(b: InteractiveBlock, out: string[], hiddenBy: InteractiveBlock[] = []): void {
   const c = b.node.content ?? {};
   const a = b.answer?.user_answer as any;
+  const start = out.length;
+  renderBody(b, c, a, out);
+  // Say up front that the page doesn't show it yet, so the model goes in order.
+  if (hiddenBy.length && out[start]?.endsWith(']')) {
+    out[start] = `${out[start].slice(0, -1)} · hidden until ${hiddenBy.map((x) => x.ref).join(', ')} ${hiddenBy.length > 1 ? 'are' : 'is'} done]`;
+  }
+}
+
+function renderBody(b: InteractiveBlock, c: any, a: any, out: string[]): void {
   switch (b.type) {
     case 'ActionButton':
       out.push(`[${b.ref} · button «${oneLine(c.text ?? '')}» · ${b.answer ? 'pressed' : 'not pressed'}]`);
@@ -244,7 +267,7 @@ export function renderLesson(lesson: LessonJson, answers: SavedAnswer[], opts: R
     }
     if (ib) {
       body.push('');
-      renderInteractive(ib, body);
+      renderInteractive(ib, body, blockersOf(blocks, ib));
       if (opts.live?.[ib.nodeId]) body.push(opts.live[ib.nodeId]);
       body.push('');
     } else {

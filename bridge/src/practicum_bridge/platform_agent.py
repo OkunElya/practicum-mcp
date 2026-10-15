@@ -39,7 +39,10 @@ from pathlib import Path
 from mcp.client import Client
 
 from .call import drop_proxies_for_loopback
-from .prompts import LOCAL_PAGE, LOCAL_SYSTEM, PLATFORM_INTRO
+from types import SimpleNamespace
+
+from .lesson_solver import SOLVE_TOOL, LessonSolver
+from .prompts import LOCAL_PAGE, LOCAL_SOLVER, LOCAL_SYSTEM, PLATFORM_INTRO
 
 SELF = "ask_platform_ai"
 # Driver-only tools the model must not see or call (dev_* test tools are hidden too).
@@ -53,6 +56,21 @@ CHECK_TOOLS = {"check_task", "check_code_exercise"}
 REPEAT_LIMIT = 2
 # …and after this many such refused repeats the driver stops: the model is looping.
 LOOP_STOP = 3
+# Actions that depend on what the page contains (block refs, files): read the page first.
+NEEDS_READ = {"answer_quiz", "press_action_button", "run_code_exercise", "check_code_exercise", "reset_code_exercise", "set_code", "create_file", "run_code", "check_task"}
+PAGE_READS = {"read_lesson", "read_task", "get_code"}
+
+
+def looks_patterned(answer: str) -> bool:
+    """1=A; 2=B; 3=C… or 1,2,3,4…: what a small model writes instead of deciding (seen on the real course)."""
+    a = answer.strip()
+    pairs = re.findall(r"(\d+)\s*[=:\-–→]\s*([A-Za-z])\b", a)
+    if len(pairs) >= 3 and all(int(n) - 1 == ord(l.upper()) - 65 for n, l in pairs):
+        return True
+    nums = [int(x) for x in re.findall(r"\d+", a)] if re.fullmatch(r"[\d\s,;]+", a) else []
+    if len(nums) >= 4 and nums == list(range(1, len(nums) + 1)):
+        return True
+    return bool(re.fullmatch(r"1234567891?0?", a.replace(" ", "")))
 ASK_RETRY_WAIT_S = 70
 CALL_RE = re.compile(r"^\s*CALL\s+(\{.*\})\s*$")
 ANSWER_RE = re.compile(r"^\s*ANSWER:\s*(.*)$", re.S)
@@ -310,7 +328,8 @@ class OllamaBackend:
             if visible(t.name, self.hidden)
         ]
         self.ctx = await asyncio.to_thread(self._model_ctx)
-        self.messages = [{"role": "system", "content": self.system}]
+        system = self.system + (LOCAL_SOLVER if any(t.name == SOLVE_TOOL["name"] for t in tools) else "")
+        self.messages = [{"role": "system", "content": system}]
         self.note(f"to {self.name}", f"{len(self.tools)} tools, context {self.ctx or '?'}\n{self.system}")
         return True
 
@@ -374,6 +393,24 @@ class OllamaBackend:
                     last = chunk
                     break
             return {**last, "message": {"role": "assistant", "content": "".join(content), "thinking": "".join(thinking), "tool_calls": calls}}
+
+    async def structured(self, messages: list[dict], schema: dict, temperature: float, seed: int) -> dict | None:
+        """One isolated call (no tools, no conversation) whose reply must match a JSON schema."""
+        payload = {"model": self.model, "messages": messages, "format": schema, "stream": False, "options": {**self.options, "temperature": temperature, "seed": seed}}
+        if self.think:
+            payload["think"] = False if self.think == "off" else self.think
+
+        def post() -> dict:
+            with self._request("/api/chat", payload, 900) as r:
+                return json.loads(r.read())
+
+        for _ in range(2):
+            try:
+                data = await asyncio.to_thread(post)
+                return json.loads((data.get("message") or {}).get("content") or "")
+            except (OSError, http.client.HTTPException, ValueError) as e:
+                self.note("ollama error", f"structured call: {e}")
+        return None
 
     async def turn(self) -> Turn | None:
         data = None
@@ -455,8 +492,13 @@ class Session:
     tracking carry over to the next message.
     """
 
-    def __init__(self, client: Client, backend, note: Note):
+    def __init__(self, client: Client, backend, note: Note, solver: bool = True):
         self.client, self.backend, self.note = client, backend, note
+        # Local tools run by the driver itself; solve_current_lesson needs structured model calls.
+        self.local: dict[str, Callable] = {}
+        if solver and hasattr(backend, "structured"):
+            self.local[SOLVE_TOOL["name"]] = self.solve_lesson
+        self.ask_user = None  # async (ref, block text, candidates) -> answer | None; set by practicum-chat
         self.tools: list = []
         self.known: set[str] = set()
         self.read_only: set[str] = set()
@@ -468,11 +510,16 @@ class Session:
         self.refused = 0  # repeats of a failing call that were not run
         self.last_read: tuple[tuple, str, int] | None = None  # (call, result, times in a row) of the latest read
         self.failed_check: tuple | None = None  # the last failed check, until something changes
+        self.must_read = True  # the model hasn't read the current page yet (start, or after a page change)
+        self.pattern_warned: set[tuple] = set()  # patterned answers already refused once
         self.by_user: list[str] = []  # calls the user made by hand, reported with the next message
         self.page_text = ""  # the last where_am_i, in full
 
     async def open(self) -> bool:
-        self.tools = (await self.client.list_tools()).tools
+        self.tools = list((await self.client.list_tools()).tools)
+        for name in self.local:
+            spec = SOLVE_TOOL if name == SOLVE_TOOL["name"] else {"name": name, "description": ""}
+            self.tools.append(SimpleNamespace(name=name, description=spec["description"], input_schema={"type": "object", "properties": {}}, annotations=SimpleNamespace(read_only_hint=False)))
         self.known = {t.name for t in self.tools if visible(t.name, self.backend.hidden)}
         self.read_only = {t.name for t in self.tools if t.annotations and t.annotations.read_only_hint}
         self.where = await self.page()
@@ -491,13 +538,35 @@ class Session:
         latest = f"\n\nРезультаты последних вызовов:\n\n{results}" if results else ""
         return intro + done + latest + "\n\nПродолжай: CALL-строки или ANSWER: ..."
 
+    def reads_this_page(self, c: dict, out: str) -> bool:
+        """A read of the page that is open (read_lesson may name it, or another lesson, by id or number)."""
+        if c["tool"] != "read_lesson" or not c["args"].get("lesson"):
+            return True
+        m = re.search(r"\bid=([0-9a-f-]{36})", out)
+        return bool(m) and f"id={m.group(1)}" in self.page_text
+
     async def call(self, tool: str, args: dict) -> tuple[str, bool]:
+        if tool in self.local:
+            try:
+                return await self.local[tool](), False
+            except Exception as e:  # a bug in a local tool must not end the run
+                return f"[tool] {tool} failed: {type(e).__name__}: {e}", True
         r = await self.client.call_tool(tool, clean_args(args))
         return text_of(r), bool(r.is_error)
+
+    async def solve_lesson(self) -> str:
+        async def bridge_call(tool: str, args: dict) -> tuple[str, bool]:
+            r = await self.client.call_tool(tool, clean_args(args))
+            return text_of(r), bool(r.is_error)
+
+        solver = LessonSolver(bridge_call, self.backend, self.note, self.ask_user)
+        return await solver.solve()
 
     async def user_call(self, tool: str, args: dict) -> tuple[str, bool]:
         """A call the user makes by hand; the model hears about it with the next message."""
         out, err = await self.call(tool, args)
+        if not err and tool in PAGE_READS:
+            self.must_read = False  # the model gets this result with the next message
         sig = f"{tool}({json.dumps(clean_args(args), ensure_ascii=False)})"
         self.history.append(f"- {sig} → {short(out)} (вызвал пользователь)")
         self.by_user.append(f"{sig} {'→ ОШИБКА' if err else '→'}\n{clip(out, 3000)}")
@@ -520,6 +589,7 @@ class Session:
         if changed:
             self.note("page changed", f"{self.where}\n→ {now}")
             self.where = now
+            self.must_read = True
         if self.by_user:
             text = "Я сам выполнил вызовы:\n\n" + "\n\n".join(self.by_user) + "\n\n" + text
             self.by_user = []
@@ -565,6 +635,22 @@ class Session:
                     done.append(Executed(c, "", False, stop_reason))
                     continue
                 key = (c["tool"], json.dumps(c["args"], sort_keys=True))
+                if c["tool"] in NEEDS_READ and self.must_read:
+                    # Seen live: after complete_lesson the model answered the old lesson's q4 on the new page.
+                    self.refused += 1
+                    self.note("refused", f"{c['tool']}: the current page hasn't been read yet")
+                    done.append(Executed(c, "", True, f"сначала прочитай текущую страницу ({self.where}): read_lesson на уроке, read_task в тренажёре — номера блоков и файлы здесь свои"))
+                    if self.refused >= LOOP_STOP * 2:
+                        halted = 4
+                    stop_reason = "предыдущий вызов не выполнен; посмотри результат и реши заново"
+                    continue
+                answer = str(c["args"].get("answer", "")) if c["tool"] == "answer_quiz" else ""
+                if answer and looks_patterned(answer) and key not in self.pattern_warned:
+                    self.pattern_warned.add(key)
+                    self.note("refused", f"answer_quiz: patterned answer {answer!r} (send it again to insist)")
+                    done.append(Executed(c, "", True, f"ответ «{answer}» похож на шаблон, а не на решение. Реши каждый пункт по тексту урока; если не уверен — спроси Практикум ИИ (ask_platform_ai); если уверен, что ответ именно такой, отправь его ещё раз"))
+                    stop_reason = "предыдущий вызов не выполнен; посмотри результат и реши заново"
+                    continue
                 last = self.errors.get(key)
                 same = self.last_read if self.last_read and self.last_read[0] == key else None
                 if same and same[2] >= REPEAT_LIMIT:
@@ -610,6 +696,8 @@ class Session:
                 self.note(f"{sig}{' ERROR' if err else ''}", out)
                 done.append(Executed(c, out, err))
                 self.history.append(f"- {sig} → {short(out)}")
+                if not err and c["tool"] in PAGE_READS and self.reads_this_page(c, out):
+                    self.must_read = False
                 if not err and c["tool"] in self.read_only:
                     self.last_read = (key, out, same[2] + 1 if same and same[1] == out else 1)
                 elif not err:
@@ -650,6 +738,7 @@ class Session:
         if page_changed:
             self.note("page changed", f"{self.where}\n→ {now}")
             self.where = now
+            self.must_read = True
         self.backend.results(done, turn.bad, page_changed)
         return halted
 
@@ -667,11 +756,11 @@ def log_note(log_path: Path) -> Note:
     return note
 
 
-async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Callable[[Client, Note], object]) -> int:
+async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Callable[[Client, Note], object], solver: bool = True) -> int:
     drop_proxies_for_loopback(url)
     note = log_note(log_path)
     async with Client(url) as client:
-        session = Session(client, make_backend(client, note), note)
+        session = Session(client, make_backend(client, note), note, solver)
         if not await session.open():
             return 1
         out = await session.ask(task, rounds)
@@ -706,10 +795,11 @@ def local_main() -> None:
     p.add_argument("--temperature", type=float, default=0.2, help="0.2 scored best in evals/tune.py")
     p.add_argument("--think", choices=["low", "medium", "high"], help="reasoning effort for models that support it (gpt-oss)")
     p.add_argument("--log", type=Path, default=Path("local-agent.log"))
+    p.add_argument("--no-solver", action="store_true", help="don't offer solve_current_lesson (block-by-block lesson solver)")
     p.set_defaults(rounds=30)  # one tool call per reply: a simple trainer task takes 14-19 rounds
     a = p.parse_args()
     make = lambda client, note: OllamaBackend(note, a.model, a.ollama, a.num_ctx, a.temperature, a.think)  # noqa: E731
-    sys.exit(asyncio.run(run(a.task, a.rounds, a.url, a.log, make)))
+    sys.exit(asyncio.run(run(a.task, a.rounds, a.url, a.log, make, not a.no_solver)))
 
 
 if __name__ == "__main__":
