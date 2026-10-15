@@ -85,6 +85,21 @@ one action runs per round; every chat message and every action still needs your 
 overlay. The platform keeps one chat per lesson, so after a page change the driver repeats the
 instructions.
 
+## Local models (Ollama)
+
+`uv run --directory bridge practicum-local-agent --model gpt-oss-32k [--think low] "<task>"` runs the
+same loop with a local model through Ollama's `/api/chat`; the conversation is kept by the driver,
+and the model may consult Практикум ИИ via `ask_platform_ai`. Ollama's default context is 4k, which
+cuts off the tool list: use a variant from [`models/`](models/) or `--num-ctx 32768`.
+
+## Installing the extension permanently
+
+`npm run package` builds `extension/practicum-mcp-<version>.xpi` (no token, no dev tools). Waterfox
+installs it from `about:addons` → *Install Add-on From File…* after setting
+`xpinstall.signatures.required = false`; release Firefox needs a signed build (or use
+`about:debugging` for a temporary load). Paste the token from `~/.config/practicum-mcp/token` into
+the toolbar popup.
+
 ## Staying in control
 
 - **Overlay** (bottom right of every Practicum tab): the running tool, the step log,

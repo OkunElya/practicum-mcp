@@ -8,3 +8,6 @@ __pycache__/
 # inspection output: screenshots and recorded traffic from the logged-in account
 scripts/inspect/*.png
 scripts/inspect/net-watch-last.json
+
+# packaged extension
+extension/*.xpi

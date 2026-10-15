@@ -6,7 +6,8 @@
     "test": "vitest run",
     "build": "node extension/build.mjs",
     "watch": "node extension/build.mjs --watch",
-    "typecheck": "tsc -p extension"
+    "typecheck": "tsc -p extension",
+    "package": "node extension/build.mjs --package"
   },
   "author": "",
   "license": "ISC",
