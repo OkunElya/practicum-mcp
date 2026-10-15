@@ -23,6 +23,7 @@ import json
 import re
 import sys
 import time
+from dataclasses import dataclass
 import urllib.error
 import urllib.request
 from collections.abc import Awaitable, Callable
@@ -138,18 +139,51 @@ def clip(s: str, n: int = MAX_RESULT_CHARS) -> str:
 
 Note = Callable[[str, str], None]
 
+NATIVE_RULES = """\
+Ты управляешь платформой Яндекс Практикума в браузере пользователя через инструменты (tools). \
+Каждое действие видно пользователю на странице, необратимые действия он подтверждает сам.
+
+Правила:
+- За один ответ — не больше ОДНОГО действия (ответ на тест, нажатие кнопки, переход, отправка кода); \
+чтения (read_lesson, where_am_i, get_progress и т. п.) можно добавлять. Лишние вызовы не выполнятся: \
+сначала посмотри результат.
+- Не придумывай номера блоков: бери их из read_lesson (blocks=true показывает только задания \
+с пронумерованными вариантами). В answer_quiz передавай номера вариантов, например "2".
+- Большинство тестов принимают ответ только один раз — отвечай, только когда уверен.
+- Когда задача выполнена (или выполнить её нельзя), ответь обычным текстом без вызовов: \
+кратко, что сделано."""
+
+
+@dataclass
+class Turn:
+    calls: list[dict]  # {"tool", "args"}
+    answer: str | None
+    bad: list[str]
+
+
+@dataclass
+class Executed:
+    call: dict
+    out: str
+    err: bool
+    skipped: str | None = None  # reason when the call was not run
+
 
 class PlatformBackend:
-    """Практикум ИИ through ask_platform_ai. Its chat lives per lesson on the server."""
+    """Практикум ИИ through ask_platform_ai, text protocol. Its chat lives per lesson on the server."""
 
     name = "Практикум ИИ"
     hidden = HIDDEN
-    remembers_across_pages = False
 
     def __init__(self, client: Client, note: Note, keep_chat: bool = False):
         self.client, self.note, self.keep_chat = client, note, keep_chat
+        self.intro = ""
+        self.full: Callable[[str], str] = lambda r: r
+        self.message = ""
 
-    async def start(self) -> bool:
+    async def start(self, tools, task: str, full: Callable[[str], str]) -> bool:
+        self.intro, self.full = INTRO.format(tools=tool_lines(tools, self.hidden), task=task), full
+        self.message = self.intro
         if self.keep_chat:
             return True
         # A fresh chat, so earlier conversations in this lesson don't steer the model.
@@ -157,12 +191,17 @@ class PlatformBackend:
         self.note("reset chat", "\n".join(getattr(x, "text", "") for x in r.content))
         return not r.is_error
 
-    async def ask(self, message: str, self_contained: Callable[[str], str]) -> str | None:
+    async def turn(self) -> Turn | None:
+        message = self.message
+        self.note(f"to {self.name}", message)
         for attempt in range(1, ASK_RETRIES + 1):
             res = await self.client.call_tool(SELF, {"question": message})
             text = "\n".join(getattr(c, "text", "") for c in res.content)
             if not res.is_error:
-                return strip_suggestions(text)
+                reply = strip_suggestions(text)
+                self.note(self.name, reply)
+                calls, answer, bad = parse_reply(reply)
+                return Turn(calls, answer, bad)
             if "[platform]" not in text or attempt == ASK_RETRIES:
                 self.note("ask_platform_ai failed", text)
                 return None
@@ -177,17 +216,37 @@ class PlatformBackend:
                 self.note("Практикум ИИ still unavailable → new chat", "\n".join(getattr(x, "text", "") for x in r.content))
                 if r.is_error:
                     return None
-                message = "Чат пришлось начать заново.\n\n" + self_contained(message)
+                message = "Чат пришлось начать заново.\n\n" + self.full(message)
                 self.note("resend (new chat)", message)
         return None
 
+    def off_format(self) -> None:
+        self.message = "Ответ не по формату.\n\n" + self.full("")
+
+    def results(self, done: list[Executed], bad: list[str], page_changed: bool) -> None:
+        parts = []
+        for e in done:
+            if e.skipped:
+                parts.append(f"{e.call['tool']}({json.dumps(e.call['args'], ensure_ascii=False)}) → НЕ ВЫПОЛНЕН: {e.skipped}")
+            else:
+                parts.append(f"{e.call['tool']} {'→ ОШИБКА' if e.err else '→'}\n{clip(e.out)}")
+        joined = "\n\n".join(parts) + (f"\nНе разобраны строки: {bad}" if bad else "")
+        if page_changed:
+            # The platform chat is per lesson: the new page's chat has never seen the protocol.
+            self.message = "Открылась новая страница, поэтому повторяю инструкции.\n\n" + self.full(joined)
+        else:
+            self.message = "Результаты вызовов:\n\n" + joined + "\n\nПродолжай: CALL-строки или ANSWER: ..."
+
 
 class OllamaBackend:
-    """A local model via Ollama's /api/chat. The conversation is kept here."""
+    """A local model via Ollama's /api/chat with native tool calling. History is kept here.
+
+    (gpt-oss routes text-protocol "CALL {…}" lines into its tool channel, which Ollama
+    then fails to parse with a 500, so local models get real function definitions.)
+    """
 
     hidden = {"reset_platform_ai_chat"}  # it may consult Практикум ИИ via ask_platform_ai
-    remembers_across_pages = True
-    KEEP_FULL = 6  # most recent messages sent in full; older tool results are shortened
+    KEEP_FULL = 8  # most recent messages sent in full; older tool results are shortened
 
     def __init__(self, note: Note, model: str, base_url: str, num_ctx: int | None, temperature: float, think: str | None = None):
         self.note, self.model, self.base_url, self.think = note, model, base_url.rstrip("/"), think
@@ -196,41 +255,54 @@ class OllamaBackend:
             self.options["num_ctx"] = num_ctx
         self.name = model
         self.messages: list[dict] = []
+        self.tools: list[dict] = []
         # Talk to Ollama directly: the system proxy must not see loopback traffic.
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    async def start(self) -> bool:
+    async def start(self, tools, task: str, full: Callable[[str], str]) -> bool:
+        self.tools = [
+            {"type": "function", "function": {"name": t.name, "description": t.description or "", "parameters": t.input_schema or {"type": "object", "properties": {}}}}
+            for t in tools
+            if visible(t.name, self.hidden)
+        ]
+        self.messages = [{"role": "system", "content": NATIVE_RULES}, {"role": "user", "content": f"Задача: {task}"}]
+        self.note(f"to {self.name}", f"{len(self.tools)} tools\n{NATIVE_RULES}\n\nЗадача: {task}")
         return True
 
     def _view(self) -> list[dict]:
         out = []
         cut = len(self.messages) - self.KEEP_FULL
         for i, m in enumerate(self.messages):
-            if 0 < i < cut and m["role"] == "user" and len(m["content"]) > 600:
+            if 1 < i < cut and m["role"] == "tool" and len(m["content"]) > 600:
                 m = {**m, "content": m["content"][:600] + "\n…(старый результат сокращён)"}
             out.append(m)
         return out
 
     def _post(self) -> dict:
-        payload = {"model": self.model, "messages": self._view(), "stream": False, "options": self.options}
+        payload = {"model": self.model, "messages": self._view(), "tools": self.tools, "stream": False, "options": self.options}
         if self.think:
             payload["think"] = self.think  # gpt-oss: reasoning effort low/medium/high
-        body = json.dumps(payload).encode()
-        req = urllib.request.Request(f"{self.base_url}/api/chat", data=body, headers={"content-type": "application/json"})
+        req = urllib.request.Request(f"{self.base_url}/api/chat", data=json.dumps(payload).encode(), headers={"content-type": "application/json"})
         with self.opener.open(req, timeout=900) as r:
             return json.loads(r.read())
 
-    async def ask(self, message: str, self_contained: Callable[[str], str]) -> str | None:
-        self.messages.append({"role": "user", "content": message})
-        for attempt in (1, 2):
+    async def turn(self) -> Turn | None:
+        data = None
+        for attempt in (1, 2, 3):
             try:
                 data = await asyncio.to_thread(self._post)
                 break
             except (urllib.error.URLError, TimeoutError, ValueError) as e:
-                self.note("ollama error", f"{e}")
-                if attempt == 2:
+                body = ""
+                if isinstance(e, urllib.error.HTTPError):
+                    try:
+                        body = e.read().decode(errors="replace")[:500]
+                    except Exception:
+                        pass
+                self.note("ollama error", f"{e} {body}".strip())
+                if attempt == 3:
                     return None
-                await asyncio.sleep(5)
+                await asyncio.sleep(3)
         msg = data.get("message") or {}
         thinking = (msg.get("thinking") or "").strip()
         if thinking:
@@ -238,13 +310,32 @@ class OllamaBackend:
         if data.get("done_reason") == "length":
             self.note("warning", "the model hit its output/context limit (done_reason=length); raise num_ctx")
         content = (msg.get("content") or "").strip()
-        if not content and thinking:
-            self.note("warning", "empty reply: the model only reasoned; it will be asked again")
-        self.messages.append({"role": "assistant", "content": content})
-        prompt, gen = data.get("prompt_eval_count"), data.get("eval_count")
-        if prompt is not None:
-            self.note("tokens", f"prompt {prompt}, reply {gen}")
-        return content
+        raw_calls = msg.get("tool_calls") or []
+        self.messages.append({"role": "assistant", "content": content, **({"tool_calls": raw_calls} if raw_calls else {})})
+        self.note("tokens", f"prompt {data.get('prompt_eval_count')}, reply {data.get('eval_count')}")
+        calls = []
+        for c in raw_calls:
+            fn = c.get("function") or {}
+            args = fn.get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {}
+            calls.append({"tool": str(fn.get("name", "")), "args": args})
+        self.note(self.name, "\n".join(f"CALL {json.dumps(c, ensure_ascii=False)}" for c in calls) or content or "(empty)")
+        answer = None if calls else (re.sub(r"^\s*ANSWER:\s*", "", content) or None)
+        return Turn(calls, answer, [])
+
+    def off_format(self) -> None:
+        self.messages.append({"role": "user", "content": "Пустой ответ. Вызови нужный инструмент или напиши итог текстом."})
+
+    def results(self, done: list[Executed], bad: list[str], page_changed: bool) -> None:
+        for i, e in enumerate(done):
+            content = f"НЕ ВЫПОЛНЕН: {e.skipped}" if e.skipped else (("ОШИБКА: " if e.err else "") + clip(e.out))
+            if page_changed and i == len(done) - 1:
+                content += "\n\n(Открылась другая страница.)"
+            self.messages.append({"role": "tool", "tool_name": e.call["tool"], "content": content})
 
 
 async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Callable[[Client, Note], object]) -> int:
@@ -259,11 +350,11 @@ async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Ca
 
     async with Client(url) as client:
         backend = make_backend(client, note)
-        hidden: set[str] = backend.hidden
         tools = (await client.list_tools()).tools
-        known = {t.name for t in tools if visible(t.name, hidden)}
-        intro = INTRO.format(tools=tool_lines(tools, hidden), task=task)
+        known = {t.name for t in tools if visible(t.name, backend.hidden)}
+        read_only = {t.name for t in tools if t.annotations and t.annotations.read_only_hint}
         history: list[str] = []  # one line per executed call, for self-contained messages
+        intro = INTRO.format(tools=tool_lines(tools, backend.hidden), task=task)
 
         async def page() -> str:
             r = await client.call_tool("where_am_i", {})
@@ -277,35 +368,31 @@ async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Ca
             latest = f"\n\nРезультаты последних вызовов:\n\n{results}" if results else ""
             return intro + done + latest + "\n\nПродолжай: CALL-строки или ANSWER: ..."
 
-        if not await backend.start():
+        if not await backend.start(tools, task, full):
             return 1
-
-        read_only = {t.name for t in tools if t.annotations and t.annotations.read_only_hint}
         where = await page()
-        message = intro
-        for rnd in range(1, rounds + 1):
-            note(f"to {backend.name} (round {rnd})", message)
-            reply = await backend.ask(message, full)
-            if reply is None:
-                return 1
-            note(backend.name, reply)
 
-            calls, answer, bad = parse_reply(reply)
-            if not calls:
-                if answer is not None:
-                    note("done", answer)
+        for rnd in range(1, rounds + 1):
+            note("round", str(rnd))
+            turn = await backend.turn()
+            if turn is None:
+                return 1
+            if not turn.calls:
+                if turn.answer is not None:
+                    note("done", turn.answer)
                     return 0
-                note("off format", "asking again for CALL/ANSWER lines")
-                message = (
-                    "Ответ не по формату. Пришли строки CALL {\"tool\": ..., \"args\": {...}} или одну строку ANSWER: ..."
-                    if backend.remembers_across_pages
-                    else "Ответ не по формату.\n\n" + full()
-                )
+                note("off format", "asking again")
+                backend.off_format()
                 continue
 
-            results = []
+            done: list[Executed] = []
             changed = None
-            for i, c in enumerate(calls):
+            stop_reason = None
+            for c in turn.calls:
+                if stop_reason:
+                    # Later calls were planned without the result: at most one action per round.
+                    done.append(Executed(c, "", False, stop_reason))
+                    continue
                 if c["tool"] not in known:
                     out, err = f"инструмент {c['tool']!r} недоступен", True
                 else:
@@ -313,36 +400,22 @@ async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Ca
                     out = "\n".join(getattr(x, "text", "") for x in r.content)
                     err = bool(r.is_error)
                 note(f"{c['tool']}({json.dumps(c['args'], ensure_ascii=False)}){' ERROR' if err else ''}", out)
-                results.append(f"{c['tool']} {'→ ОШИБКА' if err else '→'}\n{clip(out)}")
+                done.append(Executed(c, out, err))
                 history.append(f"- {c['tool']}({json.dumps(c['args'], ensure_ascii=False)}) → {short(out)}")
-                if not err and c["tool"] not in read_only and (now := await page()) != where:
-                    changed = now
-                rest = calls[i + 1 :]
                 acted = c["tool"] not in read_only
-                if rest and (err or acted):
-                    # Later calls were planned without this result: at most one action per
-                    # round, so the model sees what it did before deciding the next step.
-                    why = "ошибка" if err else "за один ответ выполняется только одно действие"
-                    results.append(
-                        f"Остальные вызовы не выполнены ({why}): "
-                        + ", ".join(f"{x['tool']}({json.dumps(x['args'], ensure_ascii=False)})" for x in rest)
-                        + ". Посмотри результат выше и реши заново."
-                    )
-                    break
-            extra = f"\nНе разобраны строки: {bad}" if bad else ""
-            joined = "\n\n".join(results) + extra
+                if not err and acted and (now := await page()) != where:
+                    changed = now
+                if err:
+                    stop_reason = "предыдущий вызов завершился ошибкой; посмотри результат и реши заново"
+                elif acted:
+                    stop_reason = "за один ответ выполняется только одно действие; посмотри результат и реши заново"
 
             now = changed or await page()
-            if now != where:
+            page_changed = now != where
+            if page_changed:
                 note("page changed", f"{where}\n→ {now}")
                 where = now
-                message = (
-                    "Открылась новая страница.\n\nРезультаты вызовов:\n\n" + joined + "\n\nПродолжай: CALL-строки или ANSWER: ..."
-                    if backend.remembers_across_pages
-                    else "Открылась новая страница, поэтому повторяю инструкции.\n\n" + full(joined)
-                )
-            else:
-                message = "Результаты вызовов:\n\n" + joined + "\n\nПродолжай: CALL-строки или ANSWER: ..."
+            backend.results(done, turn.bad, page_changed)
 
         note("stopped", f"round limit ({rounds}) reached")
         return 2

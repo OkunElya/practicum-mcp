@@ -113,7 +113,7 @@ export interface TaskInfo {
 /** The trainer task in this tab, without the reference solution (`answer_panes`). */
 export function task(): TaskInfo {
   const t = state()?.trainerReducer;
-  if (!t?.task?.id) throw new ToolError('no trainer task on this page; open a practice lesson task first');
+  if (!t?.task?.id) throw new ToolError('no trainer task on this page; call open_lesson with this lesson to open its trainer');
   const tk = t.task;
   const tasks: any[] = t.lesson?.tasks ? Array.from(t.lesson.tasks) : [];
   const ws = t.webserver;

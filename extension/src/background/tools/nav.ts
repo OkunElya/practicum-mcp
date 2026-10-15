@@ -42,12 +42,13 @@ export const openLesson: Tool = {
   async run(args, ctx) {
     const { id } = await resolveLesson(args.lesson, ctx);
     const here = await ctx.page.op<WhereInfo>('where');
-    if (here.lesson?.id === id) return `Already open.\n${formatWhere(here)}`;
     const { lesson } = await ctx.page.op<{ lesson: LessonJson & { course_id: string; sprint_id: number; topic_id: string; profession_slug: string } }>('lesson', { lessonId: id });
     const slug = lesson.profession_slug || here.professionSlug;
     // Practice lessons open straight at their first unsolved task in the trainer.
     const tasks = lesson.tasks ?? [];
     const task = tasks.find((t) => !t.solved) ?? tasks[0];
+    // "Already open" only counts for the right view: a practice lesson's theory page isn't its trainer.
+    if (here.lesson?.id === id && (!task || here.kind === 'trainer')) return `Already open.\n${formatWhere(here)}`;
     const url = task
       ? `https://practicum.yandex.ru/trainer/${slug}/lesson/${id}/task/${task.id}/`
       : `https://practicum.yandex.ru/learn/${slug}/courses/${lesson.course_id}/sprints/${lesson.sprint_id}/topics/${lesson.topic_id}/lessons/${id}/`;
