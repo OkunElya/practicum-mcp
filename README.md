@@ -124,19 +124,38 @@ three refusals it stops the run. A new message lifts both this stop and the stop
 repeated failed checks. Once a local model's context is 75%
 full, older messages are cut harder; the token readout shows `prompt N/context`.
 
-## Tuning local models offline
+## Testing agents offline
 
-`uv run --directory bridge python evals/tune.py evals/scenarios/<name> --temps 0,0.2,0.5,1 --repeats 6`
-runs the real agent loop against a simulated trainer task. Nothing reaches the account:
-- File tools work on a temp copy of the project.
-- `check_task` and `fetch_preview` run the project with Django.
+`bridge/evals/` runs the real agent loop (the same `Session` and Ollama backend) against
+simulated Practicum pages. Nothing reaches the account.
 
-A scenario directory holds a captured task: `task.txt`, `lesson.txt` and `where.txt` (outputs of
-`read_task`, `read_lesson` and `where_am_i`), `files/` (the project), and `checks.json` (the pages
-and texts the checker expects).
+1. `node scripts/inspect/scrape-lessons.mjs` saves the raw JSON of every accessible lesson to
+   `bridge/evals/raw/`. It's read-only: the same `GET /api/lessons/{id}/` that `read_lesson` makes.
+2. `uv run --directory bridge python evals/make_scenarios.py` builds `bridge/evals/scenarios/`:
+   - **theory lessons:** the shortest lessons for each block type (single choice, multiple choice,
+     matching, cards, macaroni, free text, chat quiz, graded code, buttons), plus a lesson with
+     nothing to answer and one with only buttons;
+   - **trainer tasks:** the three tasks of lesson 5.2.3, which include creating new files;
+   - **journeys:** several pages in a row, including the full «Пути и view-функции» topic
+     (two theory lessons, four trainer tasks). These test moving between lessons and tasks.
+3. `uv run --directory bridge python evals/tune.py $(ls -d bridge/evals/scenarios/*/)` runs the
+   model on them and prints a table per scenario.
+   - `--temps` and `--repeats` sweep sampling; `--system-file` compares prompts.
+   - Every run's transcript is saved.
 
-The tool writes a table of solved runs, checks, rounds and tool errors per temperature, plus
-transcripts of every run. Scenarios contain course material and are not committed.
+How the simulator works:
+- **Rendering:** `read_lesson`, block lookup and answer parsing are the extension's own code
+  (`lesson_helper.ts`, run through node).
+- **Quizzes** are graded with the answer keys in the lesson JSON.
+- **Code exercises** run the platform's own tests through `testlib_shim.py`, a local stand-in for
+  its test library. `check_testlib_shim.py` checks it: the reference solution must pass and the
+  starter code must fail.
+- **Trainer checks** run the project with Django.
+
+`uv run --directory bridge pytest` includes `tests/test_sims.py`, which replays every scraped
+lesson with its key answers and walks every scenario with known solutions. It's skipped without
+the scraped data. The scraped lessons, scenarios and solutions are course material and are not
+committed.
 
 ## Installing the extension permanently
 

@@ -54,6 +54,11 @@ def main() -> None:
         print(json.dumps(get(arg)))
         return
 
+    for f in checks.get("require_files", []):
+        if not os.path.isfile(f):
+            print(json.dumps({"solved": False, "message": f"Убедитесь, что в проекте создан файл `{f}`."}))
+            return
+
     for page in checks["pages"]:
         path, view = page["path"], page.get("view")
         if view:
@@ -69,11 +74,12 @@ def main() -> None:
                 print(json.dumps({"solved": False, "message": BINDING.format(file=page["urls_file"], path=path, name=name, module=module)}))
                 return
         r = get(path)
-        if r["status"] != 200:
+        want = page.get("status", 200)
+        if r["status"] != want:
             last = r["body"].strip().splitlines()[-1:] if r["status"] >= 500 else []
-            print(json.dumps({"solved": False, "message": f"При запросе к `{path}` сервер вернул код {r['status']}, а должен 200. {' '.join(last)}".strip()}))
+            print(json.dumps({"solved": False, "message": f"При запросе к `{path}` сервер вернул код {r['status']}, а должен {want}. {' '.join(last)}".strip()}))
             return
-        if page["text"] not in r["body"]:
+        if page.get("text") and page["text"] not in r["body"]:
             print(json.dumps({"solved": False, "message": f"Убедитесь, что при запросе к `{path}` возвращается текст «{page['text']}»."}))
             return
     print(json.dumps({"solved": True, "message": ""}))

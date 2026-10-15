@@ -127,6 +127,16 @@ Block types found (walk of 77 lessons):
 | `QuizChat` | dialog quiz: a state machine of bot messages and reply buttons (`state`, `initial`, `messages[].answers[]` with `isValid`, `feedback`) | **yes**, one reply at a time + «Далее»; see actions.md C12 |
 | `QuizFeedback` | survey: `slides[]` (`likert_scale` {statements, grades}, `text` {placeholder}) | writes once at the end: `user_answer: {likertSlideId: {statementId: gradeId}, textSlideId: text}` |
 
+Grading rules seen across the 350 lessons of the profession (scraped read-only, October 2026):
+- **Single choice (`radio`):** sometimes marks several options `correct`; any one of them is right.
+- **Polls:** some `QuizSelect` blocks mark no option correct, so any answer counts.
+- **`QuizMacaroni`:** `correct_answers` lists whole accepted pairings.
+- **`QuizText`:** `validations` are `strict` or `regexp`.
+- **`QuizChat`:** a wrong reply loops back to the same message. On the last question even the
+  right reply loops back to its own message: that marks the end of the dialog.
+- **Graded `QuizCoding`:** 24 of 45 ship `test` and `answer_panes`. The other 21 have neither in
+  `GET /api/lessons/{id}/`.
+
 > ⚠️ **The answer keys reach the browser for every quiz type** (`correct`,
 > `correct_option`, `correct_section`, `validations`, `correct_answers`, `result_text`).
 > Quiz grading happens in the browser: the server stores `passed: null`. When the

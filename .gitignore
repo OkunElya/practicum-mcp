@@ -15,6 +15,8 @@ scripts/inspect/net-watch-last.json
 # eval scenarios are captured course material; results are per machine
 bridge/evals/scenarios/
 bridge/evals/results/
+bridge/evals/raw/
+bridge/evals/.build/
 
 # packaged extension
 extension/*.xpi
