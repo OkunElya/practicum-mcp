@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from practicum_bridge.platform_agent import INTERRUPTED, MAX_FAILED_CHECKS, Session, Turn, clean_args
+from practicum_bridge.platform_agent import INTERRUPTED, LOOP_STOP, MAX_FAILED_CHECKS, REPEAT_LIMIT, Session, Turn, clean_args
 
 
 def tool(name, read_only=False):
@@ -11,8 +11,9 @@ def tool(name, read_only=False):
 
 
 class FakeClient:
-    def __init__(self, replies=None, block=None):
+    def __init__(self, replies=None, block=None, errors=()):
         self.calls = []
+        self.errors = set(errors)  # tools that always fail
         self.url = "URL: https://practicum.yandex.ru/a"
         self.replies = replies or {}
         self.block = block  # tool name that hangs until cancelled
@@ -26,7 +27,7 @@ class FakeClient:
         if name == self.block:
             await asyncio.Event().wait()
         text = self.url if name == "where_am_i" else self.replies.get(name, f"{name} ok")
-        return SimpleNamespace(content=[SimpleNamespace(text=text)], is_error=False)
+        return SimpleNamespace(content=[SimpleNamespace(text=text)], is_error=name in self.errors)
 
 
 class FakeBackend:
@@ -121,3 +122,18 @@ def test_interrupt_reports_every_planned_call():
     [done] = s.backend.reported
     assert [e.call["tool"] for e in done] == ["press", "read_lesson"]
     assert all(e.skipped and INTERRUPTED in e.skipped for e in done)
+
+
+def test_repeated_failing_call_is_refused_then_stops():
+    bad = Turn([{"tool": "press", "args": {"x": 1}}], None, [])
+    c, s = make([bad] * 10, replies={"press": "no such button"}, errors={"press"})
+
+    async def go():
+        await s.open()
+        return await s.ask("press it", 20)
+
+    out = asyncio.run(go())
+    assert out.code == 4
+    assert [n for n, _ in c.calls] == ["press"] * REPEAT_LIMIT
+    refused = [r[0] for r in s.backend.reported[REPEAT_LIMIT:]]
+    assert len(refused) == LOOP_STOP and all(e.skipped for e in refused)

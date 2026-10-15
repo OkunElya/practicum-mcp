@@ -107,8 +107,24 @@ record goes to `chat.log`.
 - `/clear` starts over.
 - `/help` lists the rest: `/where`, `/tools`, `/rounds`, `/verbose`, `/model`, `/think`, `/temp`.
 
-A new message lifts the stop after repeated failed checks. Once a local model's context is 75%
+If the same call fails twice with the same error, the driver refuses to run it again. After
+three refusals it stops the run. A new message lifts both this stop and the stop after
+repeated failed checks. Once a local model's context is 75%
 full, older messages are cut harder; the token readout shows `prompt N/context`.
+
+## Tuning local models offline
+
+`uv run --directory bridge python evals/tune.py evals/scenarios/<name> --temps 0,0.2,0.5,1 --repeats 6`
+runs the real agent loop against a simulated trainer task. Nothing reaches the account:
+- File tools work on a temp copy of the project.
+- `check_task` and `fetch_preview` run the project with Django.
+
+A scenario directory holds a captured task: `task.txt`, `lesson.txt` and `where.txt` (outputs of
+`read_task`, `read_lesson` and `where_am_i`), `files/` (the project), and `checks.json` (the pages
+and texts the checker expects).
+
+The tool writes a table of solved runs, checks, rounds and tool errors per temperature, plus
+transcripts of every run. Scenarios contain course material and are not committed.
 
 ## Installing the extension permanently
 

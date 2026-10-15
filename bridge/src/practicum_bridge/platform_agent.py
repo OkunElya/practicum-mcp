@@ -47,6 +47,10 @@ ASK_RETRIES = 3
 # Failed checks in a row on one task before the driver stops (each check is a recorded attempt).
 MAX_FAILED_CHECKS = 3
 CHECK_TOOLS = {"check_task", "check_code_exercise"}
+# The same call failing with the same error this many times in a row is not run again…
+REPEAT_LIMIT = 2
+# …and after this many such refused repeats the driver stops: the model is looping.
+LOOP_STOP = 3
 ASK_RETRY_WAIT_S = 70
 CALL_RE = re.compile(r"^\s*CALL\s+(\{.*\})\s*$")
 ANSWER_RE = re.compile(r"^\s*ANSWER:\s*(.*)$", re.S)
@@ -281,6 +285,7 @@ class OllamaBackend:
 
     hidden = {"reset_platform_ai_chat"}  # it may consult Практикум ИИ via ask_platform_ai
     KEEP_FULL = 8  # most recent messages sent in full; older tool results are shortened
+    PINNED = ("read_task",)  # tools whose latest result is never shortened
     SQUEEZE_AT = 0.75  # share of the context window after which older messages are cut harder
 
     def __init__(
@@ -346,13 +351,18 @@ class OllamaBackend:
 
     def _view(self) -> list[dict]:
         squeeze = bool(self.ctx) and self.prompt_tokens > self.SQUEEZE_AT * self.ctx
-        limit = 200 if squeeze else 600
+        limit = 300 if squeeze else 800
+        # The latest read_task stays whole: its file list is at the end, and without it
+        # the model starts guessing paths (project/urls.py, …).
+        pinned = {max((i for i, m in enumerate(self.messages) if m.get("tool_name") == t), default=-1) for t in self.PINNED}
         out = []
         cut = len(self.messages) - self.KEEP_FULL
         for i, m in enumerate(self.messages):
-            if 0 < i < cut and m["role"] in ("tool", "assistant") and len(m["content"]) > limit:
+            if 0 < i < cut and i not in pinned and m["role"] in ("tool", "assistant") and len(m["content"]) > limit:
                 if m["role"] == "tool" or squeeze:
-                    m = {**m, "content": m["content"][:limit] + "\n…(старое сообщение сокращено)"}
+                    # Keep both ends: results often put the summary first and lists last.
+                    head, tail = m["content"][: limit * 2 // 3], m["content"][-limit // 3 :]
+                    m = {**m, "content": f"{head}\n…(старое сообщение сокращено)…\n{tail}"}
             out.append(m)
         return out
 
@@ -448,7 +458,7 @@ class OllamaBackend:
 
 @dataclass
 class Outcome:
-    code: int  # 0 answered, 1 the model or the bridge failed, 2 round limit, 3 stopped after failed checks
+    code: int  # 0 answered, 1 the model or the bridge failed, 2 round limit, 3 stopped after failed checks, 4 looping
     answer: str | None = None
 
 
@@ -469,6 +479,8 @@ class Session:
         self.task = ""
         self.where = ""
         self.failed_checks: dict[tuple, int] = {}
+        self.errors: dict[tuple, tuple[str, int]] = {}  # call → (its last error, how many times in a row)
+        self.refused = 0  # repeats of a failing call that were not run
         self.by_user: list[str] = []  # calls the user made by hand, reported with the next message
 
     async def open(self) -> bool:
@@ -507,6 +519,8 @@ class Session:
         self.history.clear()
         self.by_user.clear()
         self.failed_checks.clear()
+        self.errors.clear()
+        self.refused = 0
         self.task = ""
         return await self.backend.reset()
 
@@ -522,7 +536,10 @@ class Session:
         if changed:
             text += f"\n\n(Сейчас открыта другая страница: {now})"
         self.task = text
-        self.failed_checks.clear()  # a new message from the user lifts the failed-check stop
+        # A new message from the user lifts the failed-check and loop stops.
+        self.failed_checks.clear()
+        self.errors.clear()
+        self.refused = 0
         self.backend.user(text, changed)
         return await self.resume(rounds)
 
@@ -539,23 +556,35 @@ class Session:
                 self.note("off format", "asking again")
                 self.backend.off_format()
                 continue
-            if await self._execute(turn):
-                return Outcome(3)
+            if code := await self._execute(turn):
+                return Outcome(code)
         self.note("stopped", f"round limit ({rounds}) reached")
         return Outcome(2)
 
-    async def _execute(self, turn: Turn) -> bool:
-        """Run one turn's calls and report the results to the backend; True when the driver must stop."""
+    async def _execute(self, turn: Turn) -> int | None:
+        """Run one turn's calls and report the results to the backend; an Outcome code when the driver must stop."""
         done: list[Executed] = []
         changed = None
         stop_reason = None
-        halted = False
+        halted = None
         try:
             for c in turn.calls:
                 c = {"tool": c["tool"], "args": clean_args(c["args"])}
                 if stop_reason:
                     # Later calls were planned without the result: at most one action per round.
                     done.append(Executed(c, "", False, stop_reason))
+                    continue
+                key = (c["tool"], json.dumps(c["args"], sort_keys=True))
+                last = self.errors.get(key)
+                if last and last[1] >= REPEAT_LIMIT:
+                    # Small models retry a failing call verbatim (15 times in the tuning runs).
+                    self.refused += 1
+                    self.note("repeat refused", f"{c['tool']} already failed {last[1]} times with the same error")
+                    done.append(Executed(c, "", True, f"этот вызов уже {last[1]} раза подряд завершился ошибкой «{short(last[0], 300)}»; повторять его бесполезно — сделай что-то другое"))
+                    if self.refused >= LOOP_STOP:
+                        self.note("stopped", "the model keeps repeating a failing call; handing back to the user")
+                        halted = 4
+                    stop_reason = "предыдущий вызов не выполнен; посмотри результат и реши заново"
                     continue
                 if c["tool"] not in self.known:
                     out, err = f"инструмент {c['tool']!r} недоступен", True
@@ -569,12 +598,18 @@ class Session:
                 self.note(f"{sig}{' ERROR' if err else ''}", out)
                 done.append(Executed(c, out, err))
                 self.history.append(f"- {sig} → {short(out)}")
+                if err:
+                    self.errors[key] = (out, last[1] + 1 if last and last[0] == out else 1)
+                else:
+                    self.errors.pop(key, None)
+                    if c["tool"] not in self.read_only:
+                        self.errors.clear()  # the project or the page changed: earlier failures may not repeat
                 if c["tool"] in CHECK_TOOLS and not err:
                     key = (c["tool"], self.where, json.dumps(c["args"], sort_keys=True))
                     self.failed_checks[key] = 0 if out.startswith("Solved") else self.failed_checks.get(key, 0) + 1
                     if self.failed_checks[key] >= MAX_FAILED_CHECKS:
                         self.note("stopped", f"{MAX_FAILED_CHECKS} failed checks in a row on this task; handing back to the user")
-                        halted = True
+                        halted = 3
                         stop_reason = f"проверка не прошла {MAX_FAILED_CHECKS} раза подряд; решение за пользователем"
                         continue
                 acted = c["tool"] not in self.read_only
@@ -649,7 +684,7 @@ def local_main() -> None:
     p.add_argument("--model", required=True, help="Ollama model, e.g. gpt-oss-32k")
     p.add_argument("--ollama", default="http://127.0.0.1:11434", help="Ollama base URL")
     p.add_argument("--num-ctx", type=int, default=None, help="context window to request (default: the model's own setting)")
-    p.add_argument("--temperature", type=float, default=0.3)
+    p.add_argument("--temperature", type=float, default=0.2, help="0.2 scored best in evals/tune.py")
     p.add_argument("--think", choices=["low", "medium", "high"], help="reasoning effort for models that support it (gpt-oss)")
     p.add_argument("--log", type=Path, default=Path("local-agent.log"))
     a = p.parse_args()

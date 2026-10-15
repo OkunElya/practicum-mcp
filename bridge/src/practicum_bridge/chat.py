@@ -52,6 +52,7 @@ OUTCOME_HINT = {
     1: "the model or the bridge failed (see above); send a message to try again",
     2: "round limit reached; /continue lets the model keep going",
     3: "stopped after repeated failed checks; tell the model what to do next",
+    4: "stopped: the model kept repeating a failing call; tell it what to do differently",
 }
 
 
@@ -311,7 +312,7 @@ def main() -> None:
     p.add_argument("--keep-chat", action="store_true", help="(--platform) don't start a new Практикум ИИ chat first")
     p.add_argument("--ollama", default="http://127.0.0.1:11434", help="Ollama base URL")
     p.add_argument("--num-ctx", type=int, default=None, help="context window to request (default: the model's own setting)")
-    p.add_argument("--temperature", type=float, default=0.3)
+    p.add_argument("--temperature", type=float, default=0.2, help="0.2 scored best in evals/tune.py")
     p.add_argument("--think", choices=["low", "medium", "high", "off"], help="reasoning effort for models that support it")
     p.add_argument("--no-stream", action="store_true", help="show replies when complete instead of token by token")
     a = p.parse_args()

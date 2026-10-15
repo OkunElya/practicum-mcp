@@ -156,7 +156,11 @@ export async function openFile(file: string): Promise<any> {
       await sleep(200);
       node = treeNames().find((n) => n.path === prefix);
     }
-    if (!node) throw new ToolError(`"${prefix}" is not in the project's file tree (to add a new file use create_file)`);
+    if (!node) {
+      // List the real files so a model that guessed a path can pick the right one.
+      const panes: any[] = state()?.trainerReducer?.task?.panes ? Array.from(state().trainerReducer.task.panes) : [];
+      throw new ToolError(`"${prefix}" is not in the project's file tree (to add a new file use create_file). Files: ${panes.map((p) => p.name).join(', ') || 'none'}`);
+    }
     await press(node.el, isFile ? `open ${want}` : `${prefix}/`);
     await sleep(400);
   }

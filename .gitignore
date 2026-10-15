@@ -12,5 +12,9 @@ scripts/inspect/net-watch-last.json
 # agent and chat logs (page content from the account)
 *.log
 
+# eval scenarios are captured course material; results are per machine
+bridge/evals/scenarios/
+bridge/evals/results/
+
 # packaged extension
 extension/*.xpi
