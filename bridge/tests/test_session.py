@@ -151,3 +151,33 @@ def test_local_model_gets_its_own_prompt_and_the_page():
     b.user("теперь тут", True, "URL: b")
     first, second, third = (m["content"] for m in b.messages[1:])
     assert "URL: a" in first and "URL:" not in second and "URL: b" in third
+
+
+def test_unparsable_tool_call_is_retried_with_a_nudge_and_new_seed(monkeypatch):
+    import io
+    import urllib.error
+
+    from practicum_bridge import platform_agent as pa
+
+    seen = []
+
+    class Flaky(pa.OllamaBackend):
+        def _post(self, extra=None, options=None):
+            seen.append((extra, (options or self.options).get("seed")))
+            if len(seen) == 1:
+                body = io.BytesIO(b'{"error":"error parsing tool call: raw=\'{\\"code\\": \\"x Wait we need\'"}')
+                raise urllib.error.HTTPError("http://x/api/chat", 500, "Internal Server Error", {}, body)
+            return {"message": {"content": "готово"}, "prompt_eval_count": 1, "eval_count": 1}
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(pa.asyncio, "sleep", no_sleep)
+    b = Flaky(lambda k, t: None, "m", "http://127.0.0.1:1", None, 0.2)
+    b.options["seed"] = 5
+    b.messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    turn = asyncio.run(b.turn())
+    assert turn.answer == "готово"
+    assert seen[0] == (None, 5)
+    assert seen[1][0][0]["content"] == pa.PARSE_NUDGE and seen[1][1] != 5
+    assert all(m["content"] != pa.PARSE_NUDGE for m in b.messages)  # the nudge isn't kept in the history

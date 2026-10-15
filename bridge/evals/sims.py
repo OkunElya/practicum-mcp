@@ -702,6 +702,8 @@ class LessonSim(BaseSim):
             "correct": final,
             "attempts": sum(len(v) for v in self.attempts.values()),
             "unanswered": len(self.required_open()),
+            # Exercises left out: not needed for the «next» button, but the lesson isn't really done.
+            "skipped": sum(1 for b in graded if not self.attempts.get(b["ref"])),
             "checks": sum(len(self.attempts.get(b["ref"], [])) for b in graded if b["type"] == "QuizCoding"),
         }
 
@@ -769,6 +771,7 @@ class JourneySim(BaseSim):
             "checks": sum(m.get("checks", 0) for m in per),
             "blocks": sum(m.get("blocks", 0) for m in per),
             "first_try": sum(m.get("first_try", 0) for m in per),
+            "skipped": sum(m.get("skipped", 0) for m in per),
         }
 
 

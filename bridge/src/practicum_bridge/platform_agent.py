@@ -241,6 +241,12 @@ class PlatformBackend:
             self.message = "Результаты вызовов:\n\n" + joined + "\n\nПродолжай: CALL-строки или ANSWER: ..."
 
 
+PARSE_NUDGE = (
+    "Твой последний вызов инструмента не удалось разобрать: аргументы должны быть корректным JSON, "
+    "без рассуждений внутри. Повтори нужный вызов."
+)
+
+
 class OllamaBackend:
     """A local model via Ollama's /api/chat with native tool calling. History is kept here.
 
@@ -337,8 +343,9 @@ class OllamaBackend:
             out.append(m)
         return out
 
-    def _post(self) -> dict:
-        payload = {"model": self.model, "messages": self._view(), "tools": self.tools, "stream": self.stream is not None, "options": self.options}
+    def _post(self, extra: list[dict] | None = None, options: dict | None = None) -> dict:
+        messages = self._view() + (extra or [])
+        payload = {"model": self.model, "messages": messages, "tools": self.tools, "stream": self.stream is not None, "options": options or self.options}
         if self.think:
             # gpt-oss: reasoning effort low/medium/high; "off" for models that can skip it.
             payload["think"] = False if self.think == "off" else self.think
@@ -370,9 +377,10 @@ class OllamaBackend:
     async def turn(self) -> Turn | None:
         data = None
         self._abort.clear()
+        extra, options = None, None
         for attempt in (1, 2, 3):
             try:
-                data = await asyncio.to_thread(self._post)
+                data = await asyncio.to_thread(self._post, extra, options)
                 break
             except asyncio.CancelledError:
                 self._abort.set()  # the reading thread stops at the next chunk
@@ -387,6 +395,11 @@ class OllamaBackend:
                 self.note("ollama error", f"{e} {body}".strip())
                 if attempt == 3:
                     return None
+                if "error parsing tool call" in body:
+                    # gpt-oss sometimes reasons inside the call's JSON ("…HttpWe? Wait we need…").
+                    # The same request repeats the same output, so nudge it and vary the sampling.
+                    extra = [{"role": "user", "content": PARSE_NUDGE}]
+                    options = {**self.options, "seed": self.options.get("seed", 0) + attempt * 7919}
                 await asyncio.sleep(3)
         msg = data.get("message") or {}
         thinking = (msg.get("thinking") or "").strip()
