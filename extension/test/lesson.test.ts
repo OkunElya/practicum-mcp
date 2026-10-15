@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findBlock, interactiveBlocks, renderLesson, type LessonJson, type SavedAnswer } from '../src/shared/lesson';
+import { chatQuestions } from '../src/shared/lesson';
 
 // Shapes copied from real lessons (docs/platform-findings.md §4), ids shortened.
 const lesson: LessonJson = {
@@ -118,5 +119,28 @@ describe('findBlock', () => {
     expect(findBlock(blocks, 'Q5')?.nodeId).toBe('txt1');
     expect(findBlock(blocks, 'mac-c')?.nodeId).toBe('mac1');
     expect(findBlock(blocks, 'nope')).toBeUndefined();
+  });
+});
+
+describe('QuizChat', () => {
+  const content = {
+    id: 'c1',
+    initial: 'm1',
+    state: { m1: { on: { a1: 'm1', a2: 'm2' } }, m2: { on: { b1: 'm3', b2: 'm2' } }, m3: { on: {} } },
+    messages: {
+      m1: { id: 'm1', content: 'Q one?', orderList: ['a2', 'a1'], answers: { a1: { content: 'wrong', isValid: false, feedback: 'SECRET-F1' }, a2: { content: 'right', isValid: true, feedback: 'SECRET-F2' } } },
+      m2: { id: 'm2', content: 'Q two?', answers: { b1: { content: 'yes', isValid: true }, b2: { content: 'no', isValid: false } } },
+      m3: { id: 'm3', content: 'Done!', answers: {} },
+    },
+  };
+  const lesson = { id: 'L', name: 'n', lesson_type: 'web', solved: false, theory: { id: 'r', type: 'RootLayout', content: {}, nested: [{ id: 'n1', type: 'QuizChat', content }] } };
+
+  it('lists questions in dialog order with options, never the key', () => {
+    expect(chatQuestions(content).map((q) => q.text)).toEqual(['Q one?', 'Q two?']);
+    const text = renderLesson(lesson as any, [], { live: { n1: 'On screen now: bot: Q one?' } });
+    expect(text).toContain('chat quiz: 2 questions');
+    expect(text).toMatch(/Question 1: Q one\?\n {2}1\. right\n {2}2\. wrong/);
+    expect(text).toContain('On screen now: bot: Q one?');
+    expect(text).not.toMatch(/SECRET|isValid|true|false/);
   });
 });

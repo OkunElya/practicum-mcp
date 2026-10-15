@@ -1,6 +1,6 @@
 import { TOOL_SPECS } from '../../shared/specs';
 import type { Tool } from '../router';
-import { askPlatformAi } from './ai';
+import { askPlatformAi, resetPlatformAiChat } from './ai';
 import { checkCodeExercise, resetCodeExercise, runCodeExercise } from './coding';
 import { DEV_TOOLS } from './dev';
 import { completeLesson, goHome, openLesson } from './nav';
@@ -39,6 +39,7 @@ export const TOOLS: Tool[] = [
   fetchPreview,
   // platform AI
   askPlatformAi,
+  resetPlatformAiChat,
   ...(__DEV__ ? DEV_TOOLS : []),
 ];
 

@@ -5,7 +5,8 @@ import { press } from './input';
 import { code, lesson, progress, task } from './ops/read';
 import { blockElement, pressActionButton, pressTestId, quizState, quizStep, renderedBlocks, type BlockRef } from './ops/theory';
 import { lessonTasks, setCode, trainerPress, trainerState } from './ops/trainer';
-import { aiClose, aiOpen, aiSend, aiState } from './ops/ai';
+import { aiClose, aiNewChat, aiOpen, aiSend, aiState } from './ops/ai';
+import { chatQuizAnswer, chatQuizNext, chatQuizState } from './ops/chatquiz';
 import { codingPress, codingReset, codingSetCode, codingState } from './ops/coding';
 import { where } from './ops/where';
 import { isVisible } from './page';
@@ -34,6 +35,10 @@ const OPS: Record<string, (args: any) => unknown> = {
   aiOpen,
   aiSend,
   aiClose,
+  aiNewChat,
+  chatQuizState,
+  chatQuizAnswer,
+  chatQuizNext,
   codingState,
   codingSetCode,
   codingPress,

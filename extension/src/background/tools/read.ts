@@ -1,5 +1,5 @@
 import type { CodeFile, ProgressTree, TaskInfo } from '../../content/ops/read';
-import { renderLesson, type LessonJson, type SavedAnswer } from '../../shared/lesson';
+import { interactiveBlocks, renderLesson, type LessonJson, type SavedAnswer } from '../../shared/lesson';
 import { ToolError } from '../../shared/protocol';
 import type { Tool, ToolContext } from '../router';
 import { spec } from './spec';
@@ -64,7 +64,21 @@ export const readLesson: Tool = {
   async run(args, ctx) {
     const lessonId = args.lesson ? (await resolveLesson(args.lesson, ctx)).id : undefined;
     const { lesson, answers } = await ctx.page.op<{ lesson: LessonJson; answers: SavedAnswer[] }>('lesson', { lessonId });
-    return renderLesson(lesson, answers, { offset: args.offset });
+    // Chat quizzes: which question is on screen exists only in the page.
+    const live: Record<string, string> = {};
+    for (const b of interactiveBlocks(lesson.theory, answers).filter((x) => x.type === 'QuizChat')) {
+      try {
+        type Opt = { text: string; used: boolean };
+        const st = await ctx.page.op<{ options: Opt[]; next: boolean; transcript: string[]; answered: boolean }>('chatQuizState', { block: { nodeId: b.nodeId, contentId: b.contentId } });
+        const bot = (st.transcript.filter((t) => t.startsWith('bot:')).pop() ?? '').slice(5);
+        live[b.nodeId] = st.answered || !st.options.length
+          ? `On screen: ${st.answered ? 'finished' : 'no replies offered (blocked by an earlier task?)'}`
+          : `On screen now${st.next ? ' (answered; «Далее» pending — answer_quiz presses it first)' : ''}: ${bot}\nReplies (answer_quiz uses these numbers):\n${st.options.map((o, i) => `  ${i + 1}. ${o.text}${o.used ? ' (already given)' : ''}`).join('\n')}`;
+      } catch {
+        live[b.nodeId] = '(open this lesson in the tab to see which question is on screen)';
+      }
+    }
+    return renderLesson(lesson, answers, { offset: args.offset, blocksOnly: args.blocks, live });
   },
 };
 

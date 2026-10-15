@@ -124,6 +124,7 @@ Block types found (walk of 77 lessons):
 | `QuizText` | free text: `validations[{type:"strict"\|"regexp", match}]`, `result_text` | **yes**, writes `user_answer: "<text>"`; single attempt |
 | `QuizMacaroni` | match left↔right: `options.left/right.choices`, `shuffle_left/right`, `correct_answers` | **yes**, writes `user_answer: [[leftIdx, rightIdx], …]` |
 | `QuizCoding` | code exercise inside a theory lesson: `panes` (starter), `language`, `hint`, `test` + `answer_panes` (⚠️ leak), `coderun_config` | **yes**; saved `user_answer: {panes, run_only, test_result}`; UI not inspected yet. Very common (57 in 45 sampled lessons) |
+| `QuizChat` | dialog quiz: a state machine of bot messages and reply buttons (`state`, `initial`, `messages[].answers[]` with `isValid`, `feedback`) | **yes**, one reply at a time + «Далее»; see actions.md C12 |
 | `QuizFeedback` | survey: `slides[]` (`likert_scale` {statements, grades}, `text` {placeholder}) | writes once at the end: `user_answer: {likertSlideId: {statementId: gradeId}, textSlideId: text}` |
 
 > ⚠️ **The answer keys reach the browser for every quiz type** (`correct`,
@@ -393,6 +394,11 @@ like a user. The plan is semantic first, with DOM as the fallback.
   code (`print(2 ** 10, 7 // 2, 7 % 2)`, after several backend timeouts), graded q8 reset twice (one
   probe reset cancelled) and **re-checked with `print(int(x) + int(y))`: solved**. Two page reloads at
   the user's request (backend timeouts).
+- Практикум ИИ agent runs (each chat message and action approved by the user): 2.1.3 one tool-list
+  test (2 rounds); «Создание и клонирование репозиториев» q1 answered 1 (correct) and **completed**;
+  «Отслеживание файлов проекта» **completed by a blind batched `complete_lesson`** without its tasks
+  being read; «Игнорирование отслеживания файлов проектов»: action button q1 pressed, its AI chat
+  **reset** (new chat), chat quiz question 1 answered 3 (correct), «Далее» not yet pressed.
 
 Quiz answers were chosen by reasoning about the question, not by reading the leaked key.
 
@@ -436,6 +442,12 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
 - Quiz result marks (`…_correct` / `…_incorrect` classes) appear shortly after the answer is saved.
 - Markdown blocks can contain `{quiz-task} background: | … content: | … {/quiz-task}`: a coloured note
   box, not an interactive block.
+- **Практикум ИИ as the agent** (`practicum-platform-agent`): the platform chat is per lesson, so
+  every page change starts a fresh chat; the driver resends the protocol, task and a log then. The
+  model follows the text protocol (`CALL {...}` lines, `ANSWER:`), but tends to batch whole plans
+  with invented block ids and guessed results; the driver runs at most one action per round and
+  stops a batch at the first error. Chatty replies may contain example `CALL`/`ANSWER` lines in code
+  fences, which are ignored.
 - `QuizCoding` blocks use CodeMirror 5, not Monaco; a page reload shows the starter code again even
   for solved blocks (the solved attempt stays in `GET …/quizzes/`). Their run backend sometimes
   answers «Request took too long to execute; timeout occured» (no result panel); retrying or

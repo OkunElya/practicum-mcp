@@ -178,3 +178,24 @@ def test_input_schema_required_and_defaults():
     })
     assert schema["required"] == ["a"]
     assert schema["properties"]["c"] == {"type": "string", "description": "c", "enum": ["x", "y"], "default": "x"}
+
+
+def test_platform_agent_parses_calls_and_answer():
+    from practicum_bridge.platform_agent import parse_reply, strip_suggestions
+
+    text = strip_suggestions(
+        '```\nCALL {"tool": "read_lesson", "args": {}}\n```\nCALL {"tool": "answer_quiz", "args": {"block": "q1", "answer": "2"}}\n'
+        "CALL {broken\nANSWER: done\n\nSuggested follow-up questions:\n- x"
+    )
+    calls, answer, bad = parse_reply(text)
+    assert [c["tool"] for c in calls] == ["read_lesson", "answer_quiz"]
+    assert calls[1]["args"] == {"block": "q1", "answer": "2"}
+    assert answer == "done"
+    assert bad == ["CALL {broken"]
+
+
+def test_platform_agent_ignores_fenced_examples():
+    from practicum_bridge.platform_agent import parse_reply
+
+    calls, answer, bad = parse_reply("Например:\n```\nCALL {get_version()}\n```\n```\nANSWER: v1.2.3\n```\nУдачи!")
+    assert (calls, answer, bad) == ([], None, [])

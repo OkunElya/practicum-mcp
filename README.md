@@ -68,12 +68,22 @@ the tools, `uv run practicum-call where_am_i` calls one.
 | `run_code`, `deploy`, `fetch_preview` | run Python, deploy a Django project, read its pages | reversible / read |
 | `check_task` | submit for checking (an attempt) | **asks first** |
 | `show_hint` | next hint of the task | read |
-| `ask_platform_ai` | ask Практикум ИИ in the lesson's chat | **asks first** |
+| `ask_platform_ai`, `reset_platform_ai_chat` | ask Практикум ИИ in the lesson's chat; start a new chat | **asks first** |
 
 The tool list is defined once in [`shared/tools.json`](shared/tools.json), and the
 descriptions there are written for small models. Errors carry a kind: `platform`
 (the site's own failures, retried automatically and worth retrying later), `denied`
 (you said no), `stopped`, `timeout`, `no_tab`, `tool`.
+
+## Letting Практикум ИИ drive
+
+`uv run --directory bridge practicum-platform-agent "<task>"` lets the site's own assistant use
+the tools through its chat: it gets the tool list and the task, replies with
+`CALL {"tool": …, "args": …}` lines, the driver runs them and sends the results back until the
+assistant writes `ANSWER: …`. The lesson's AI chat is reset first (`--keep-chat` to skip). At most
+one action runs per round; every chat message and every action still needs your approval in the
+overlay. The platform keeps one chat per lesson, so after a page change the driver repeats the
+instructions.
 
 ## Staying in control
 

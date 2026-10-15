@@ -24,3 +24,4 @@ dev = [
 [project.scripts]
 practicum-bridge = "practicum_bridge.__main__:main"
 practicum-call = "practicum_bridge.call:main"
+practicum-platform-agent = "practicum_bridge.platform_agent:main"

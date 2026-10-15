@@ -1,7 +1,8 @@
 import type { BlockRef, QuizStep } from '../../content/ops/theory';
 import { describePlan, planAnswer, type QuizPlan } from '../../shared/answers';
-import { findBlock, interactiveBlocks, type InteractiveBlock, type LessonJson, type SavedAnswer } from '../../shared/lesson';
+import { chatQuestions, findBlock, interactiveBlocks, type InteractiveBlock, type LessonJson, type SavedAnswer } from '../../shared/lesson';
 import { ToolError } from '../../shared/protocol';
+import { sleep } from '../page';
 import type { Tool, ToolContext } from '../router';
 import { spec } from './spec';
 
@@ -80,16 +81,93 @@ function checkAnswerable(b: InteractiveBlock, retry: boolean): void {
   if (!retry) throw new ToolError(`${b.ref} is already answered; pass retry=true to answer it again`);
 }
 
+// ---- QuizChat: one reply per call, on the question currently on screen ----
+
+type ChatOption = { id: string; text: string; used: boolean; verdict: 'correct' | 'incorrect' | null; feedback: string };
+type ChatState = { options: ChatOption[]; next: boolean; transcript: string[]; bubbles: number; answered: boolean; progress: number | null };
+
+const norm = (x: string) => x.replace(/\s+/g, ' ').trim().toLowerCase();
+const chatState = (ctx: ToolContext, b: InteractiveBlock) => ctx.page.op<ChatState>('chatQuizState', { block: refOf(b) });
+const optionIds = (st: ChatState) => st.options.map((o) => o.id).join(',');
+
+/** Press «Далее» and wait for the bot's next message (or the end of the dialog). */
+async function chatAdvance(ctx: ToolContext, b: InteractiveBlock, st: ChatState): Promise<ChatState> {
+  await ctx.page.op('chatQuizNext', { block: refOf(b) });
+  return ctx.page.waitFor('the bot to post its next message', async () => {
+    const x = await chatState(ctx, b);
+    if (x.next) return null;
+    const fresh = optionIds(x) !== optionIds(st) || x.options.every((o) => !o.used);
+    return fresh || x.answered || !x.options.length ? x : null;
+  }, 20_000, 400);
+}
+
+/** The option the model picked ("2" or the reply text), among the replies on screen. */
+function chatPick(st: ChatState, answer: string): ChatOption {
+  if (!st.options.length) throw new ToolError(st.answered ? 'the chat quiz is already finished' : 'the chat quiz offers no replies right now');
+  const a = answer.trim();
+  const i = /^\d+$/.test(a) ? Number(a) - 1 : st.options.findIndex((o) => norm(o.text) === norm(a) || norm(o.text).startsWith(norm(a)));
+  const option = st.options[i];
+  if (!option) throw new ToolError(`"${answer}" is not one of the replies on screen: ${st.options.map((o, j) => `${j + 1}. ${o.text}`).join('; ')}`);
+  if (option.used) throw new ToolError(`reply ${i + 1} «${option.text}» was already given; pick another`);
+  return option;
+}
+
+function describeChat(st: ChatState): string[] {
+  const lines = [`Bot: ${(st.transcript.filter((t) => t.startsWith('bot:')).pop() ?? '').slice(5)}`];
+  if (st.options.length) {
+    lines.push('Replies (answer_quiz uses these numbers):');
+    st.options.forEach((o, j) => lines.push(`  ${j + 1}. ${o.text}${o.used ? ' (already tried)' : ''}`));
+  } else lines.push(st.answered ? 'The chat quiz is finished.' : 'No replies are offered.');
+  return lines;
+}
+
+async function answerChat(ctx: ToolContext, b: InteractiveBlock, answer: string): Promise<string> {
+  let st = await chatState(ctx, b);
+  // A previous reply was left without «Далее»: move on first, so the reply goes to the question on screen.
+  if (st.next) {
+    ctx.step('«Далее» (previous reply was not followed through)');
+    st = await chatAdvance(ctx, b, st);
+  }
+  const option = chatPick(st, answer);
+  ctx.step(`reply «${option.text}»`);
+  await ctx.page.op('chatQuizAnswer', { block: refOf(b), answerId: option.id, label: option.text });
+  const after = await ctx.page.waitFor('the verdict', async () => {
+    const x = await chatState(ctx, b);
+    const o = x.options.find((y) => y.id === option.id);
+    return o?.used || x.next ? x : null;
+  }, 15_000, 300);
+  const mine = after.options.find((o) => o.id === option.id);
+  const verdict = mine?.verdict === 'correct' ? 'Correct.' : mine?.verdict === 'incorrect' ? 'Not correct.' : 'Reply given.';
+  const lines = [`${verdict}${mine?.feedback ? ` ${mine.feedback}` : ''}`];
+
+  let next = after;
+  if (after.next) next = await chatAdvance(ctx, b, after);
+  await sleep(600, ctx.signal);
+  next = await chatState(ctx, b);
+  if (next.options.length && optionIds(next) === optionIds(st)) lines.push('The bot asks the same question again.');
+  else if (next.options.length) lines.push('Next question:');
+  lines.push(...describeChat(next));
+  return lines.join('\n');
+}
+
 export const answerQuiz: Tool = {
   spec: spec('answer_quiz'),
   async describe(args, ctx) {
     const { lesson, block: b } = await block(ctx, args.block);
+    if (b.type === 'QuizChat') {
+      const st = await chatState(ctx, b);
+      if (st.next) return `Chat quiz ${b.ref} of «${lesson.name}»: press «Далее», then reply «${args.answer}» to the next question`;
+      const option = chatPick(st, args.answer);
+      const q = chatQuestions(b.node.content).find((x) => x.options.some((o) => o.id === option.id));
+      return `Reply in chat quiz ${b.ref} of «${lesson.name}»: ${q ? `«${q.text.replace(/\s+/g, ' ').slice(-80)}» → ` : ''}«${option.text}»`;
+    }
     checkAnswerable(b, args.retry);
     const once = RETRYABLE.has(b.type) ? '' : ' (one attempt only)';
     return `Answer ${b.ref} in «${lesson.name}»${once}: ${describePlan(planAnswer(b, args.answer))}`;
   },
   async run(args, ctx) {
     const { block: b } = await block(ctx, args.block);
+    if (b.type === 'QuizChat') return answerChat(ctx, b, args.answer);
     checkAnswerable(b, args.retry);
     const plan = planAnswer(b, args.answer);
     const ref = refOf(b);

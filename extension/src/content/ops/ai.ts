@@ -56,3 +56,11 @@ export async function aiClose(): Promise<true> {
   if (close && isVisible(close)) await press(close, 'close Практикум ИИ');
   return true;
 }
+
+/** «Новый чат» in the AI panel: the current lesson's chat is dropped on the server. */
+export async function aiNewChat(): Promise<true> {
+  const btn = document.querySelector<HTMLElement>('[data-test-id="yagpt-refresh-button"]');
+  if (!btn || !isVisible(btn)) throw new ToolError('the «new chat» button is not visible (is the chat open?)');
+  await press(btn, 'new chat');
+  return true;
+}

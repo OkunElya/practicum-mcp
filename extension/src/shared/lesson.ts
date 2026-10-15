@@ -36,7 +36,7 @@ export interface SavedAnswer {
   attempts_count?: number;
 }
 
-export const INTERACTIVE_TYPES = ['ActionButton', 'QuizSelect', 'QuizChoice', 'QuizCards', 'QuizText', 'QuizMacaroni', 'QuizCoding', 'QuizFeedback'] as const;
+export const INTERACTIVE_TYPES = ['ActionButton', 'QuizSelect', 'QuizChoice', 'QuizCards', 'QuizText', 'QuizMacaroni', 'QuizCoding', 'QuizChat', 'QuizFeedback'] as const;
 
 export interface InteractiveBlock {
   ref: string;
@@ -92,6 +92,40 @@ const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 function status(b: InteractiveBlock): string {
   return b.answer ? 'answered' : 'not answered';
+}
+
+export interface ChatQuestion {
+  messageId: string;
+  text: string;
+  options: { id: string; text: string }[];
+}
+
+/**
+ * The questions of a QuizChat in dialog order: walk the state machine from
+ * `initial`, following the transition that leads to a new message. Only the
+ * order is used; which reply leads on (the key) is never exposed.
+ */
+export function chatQuestions(content: any): ChatQuestion[] {
+  const messages = content?.messages ?? {};
+  const out: ChatQuestion[] = [];
+  const seen = new Set<string>();
+  let id: string | undefined = content?.initial;
+  while (id && !seen.has(id) && messages[id]) {
+    seen.add(id);
+    const m = messages[id];
+    const answers = m.answers ?? {};
+    const order: string[] = Array.isArray(m.orderList) && m.orderList.length ? m.orderList : Object.keys(answers);
+    if (order.length) {
+      out.push({
+        messageId: id,
+        text: String(m.content ?? '').trim(),
+        options: order.filter((a) => answers[a]).map((a) => ({ id: a, text: String(answers[a].content ?? '').trim() })),
+      });
+    }
+    const next = Object.values(content.state?.[id]?.on ?? {}).find((x) => x !== id && !seen.has(String(x)));
+    id = next ? String(next) : undefined;
+  }
+  return out;
 }
 
 function renderInteractive(b: InteractiveBlock, out: string[]): void {
@@ -172,6 +206,15 @@ function renderInteractive(b: InteractiveBlock, out: string[]): void {
       }
       return;
     }
+    case 'QuizChat': {
+      const qs = chatQuestions(c);
+      out.push(`[${b.ref} · chat quiz: ${qs.length} questions in a row, a wrong reply can be retried · ${status(b)} · answer the question on screen with answer_quiz block=${b.ref} answer=<option number>]`);
+      qs.forEach((q, i) => {
+        out.push(`Question ${i + 1}: ${q.text}`);
+        q.options.forEach((o, j) => out.push(`  ${j + 1}. ${oneLine(o.text)}`));
+      });
+      return;
+    }
     case 'QuizFeedback':
       out.push(`[${b.ref} · sprint feedback survey · ${status(b)} · the user's own opinion: tools never fill it in]`);
       return;
@@ -182,6 +225,10 @@ export interface RenderOptions {
   /** Resume long lessons: skip this many characters of the rendered text. */
   offset?: number;
   maxChars?: number;
+  /** Only the interactive blocks (questions with their options), no theory text. */
+  blocksOnly?: boolean;
+  /** Extra lines per block node id from the live page (e.g. the chat question on screen). */
+  live?: Record<string, string>;
 }
 
 export function renderLesson(lesson: LessonJson, answers: SavedAnswer[], opts: RenderOptions = {}): string {
@@ -191,9 +238,14 @@ export function renderLesson(lesson: LessonJson, answers: SavedAnswer[], opts: R
 
   const walk = (n: TheoryNode) => {
     const ib = byNode.get(n.id);
+    if (opts.blocksOnly && !ib) {
+      n.nested?.forEach(walk);
+      return;
+    }
     if (ib) {
       body.push('');
       renderInteractive(ib, body);
+      if (opts.live?.[ib.nodeId]) body.push(opts.live[ib.nodeId]);
       body.push('');
     } else {
       const c = n.content;

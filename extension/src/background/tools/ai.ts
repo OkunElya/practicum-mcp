@@ -71,3 +71,29 @@ async function ask(question: string, initial: AiState, ctx: ToolContext): Promis
   if (suggestions.length) lines.push('', 'Suggested follow-up questions:', ...suggestions.map((q) => `- ${q}`));
   return lines.join('\n');
 }
+
+export const resetPlatformAiChat: Tool = {
+  spec: spec('reset_platform_ai_chat'),
+  async describe() {
+    return 'Start a new Практикум ИИ chat in this lesson (the current chat is deleted)';
+  },
+  async run(_args, ctx) {
+    const st = () => ctx.page.op<AiState>('aiState');
+    let s = await st();
+    if (!s.available) throw new ToolError('Практикум ИИ is not available on this page');
+    const wasOpen = s.open;
+    try {
+      for (let i = 0; !s.open && i < 3; i++) {
+        await ctx.page.op('aiOpen');
+        s = await ctx.page.waitFor('the chat to open', async () => ((await st()).open ? st() : null), 5000).catch(st);
+      }
+      if (!s.open) throw new ToolError('could not open the AI chat');
+      if (!s.chatId) return 'The chat is already empty.';
+      await ctx.page.op('aiNewChat');
+      await ctx.page.waitFor('the chat to be cleared', async () => !(await st()).chatId, 15_000);
+      return 'Started a new, empty chat.';
+    } finally {
+      if (!wasOpen) await ctx.page.op('aiClose').catch(() => {});
+    }
+  },
+};

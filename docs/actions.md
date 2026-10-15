@@ -67,48 +67,4 @@ Leaks to strip before showing the model: quiz `correct*` / `validations` / `corr
 | C9 | Expand a collapsible section (`CutContainer`) | `section.theory-viewer__block_type_cut-container button` | none; content already in B1 | read | ✅ |
 | C10 | Download link (`ActionLinkButton`) | — | plain link | read | 📄 |
 | C11 | Code block inside a theory lesson (`QuizCoding`) | block `.quiz_type_coding` with its own **CodeMirror 5** editor (`.CodeMirror` → `.CodeMirror` instance, `setValue`/`getValue`). Two kinds: **examples** (`use_tests: false`) with only «Запустить код» (text button); **graded** (`use_tests: true`, usually `blocking`, `hint`) with `quiz-coding-run-code-button` (icon "Выполнить код"), `quiz-coding-check-code-button` «Проверить», «Подсказка» (`.quiz__coding-footer-assistive-button`). Reset: `quiz-coding-reset-code-button` → inline «Начать заново? … Задание вернется в исходное состояние» with `button.quiz__reset-dialog-btn` «Да»/«Отмена» | status `theoryBlocksReducer.runCodingQuizLoadingStatus` / `checkCodingQuizLoadingStatus` (`LOADING` → `SUCCESS`/`FAILURE`); output `.quiz__code-run-result-stdout` (`…-stdout-content_error` for tracebacks); verdict banner `.quiz__coding-notification-container.notification_type_success|error`; saved `user_answer: {panes, run_only, test_result: {stdout: {solved, error}}}` (a run of an example saves `run_only: true`). Backend timeouts show «Request took too long to execute; timeout occured» in the block instead of a result. Reset keeps the recorded solved attempt | run: rev · check: irrev (retryable) · reset: asks | ✅ run, check, reset, hint |
-
-## D. Code trainer, `serverless` (Python)
-
-| # | Action | Locator | API / result | Effect | Status |
-|---|---|---|---|---|---|
-| D1 | Read / replace code | `monaco.editor.getModels()[0]` (`file:///main.py`), write via `editor.executeEdits` | draft persists across reload | rev | ✅ |
-| D2 | Run code without checking | `button[aria-label="Выполнить код"]` | `POST /api/serverless/run_code/` `{task_id, panes}` → stdout in the result panel `section.trainer-result__desktop` and in `trainerReducer.oldPlaygroundResponse.run_result.{exit_code, stdout, stderr, timeout, oom_killed, duration}`; task/solved untouched. Frequent `400.py.runCode` (3 of 4 tries), so retry | rev | ✅ |
-| D3 | Check the solution | `[data-test-id="check-task-button"]` | `POST /api/serverless/check_task/{taskId}/` `{panes}` → `{run_result, test_result:{stdout:{solved,error}}}`; fail = result panel with stdout + checker message; pass = `task.solved`, `success_message`, `next-task-button`; last task also sets `lesson.solved`. Retry on `400 PY.check_task` | irrev (attempt, solved) | ✅ (fail and pass) |
-| D4 | Show hint | `[data-test-id="trainer-hint-button"]` | no API; hints are in `task.hints`; opens the slide-up panel `.trainer-multilevel-hint` (close: `trainer-multilevel-hint__close-btn`) | read | ✅ |
-| D5 | Reset code ("Начать заново") | button text (no test-id) → confirm dialog `.trainer-taks__confirm-modal.skills-modal_visible`: "Вернуть исходный код? Сделанные вами изменения будут отменены. Задание вернется в исходное состояние." with `[data-test-id="confirm-modal-confirm-button"]` "Да, начать сначала", `…-cancel-button` "Отмена", `…-close-button` | on confirm, replaces the code with the starter `panes` (handler `onConfirm → reset(task.id)`). Effect on `solved` not tested (only cancelled) | rev (code) | ✅ dialog, confirm not pressed |
-| D6 | Next / previous task | see A13 / A14 | | nav | ✅ |
-
-## E. Code trainer, `web_server` (Django project with preview)
-
-| # | Action | Locator | API / result | Effect | Status |
-|---|---|---|---|---|---|
-| E1 | List / read project files | `trainerReducer.task.panes[]` (`name`, `content`, `opened`) | — | read | ✅ |
-| E2 | Open a file in the editor | file tree: `.tree-node` nesting gives the path (`homepage/views.py`); click its `.tree-node__name` | new Monaco model `file:///{path}` **and a separate Monaco editor instance** (only the active one visible), new editor tab `.tab__text`, tree item `…__name_active`. Write via the editor whose model URI matches, not `getEditors()[0]` | read | ✅ |
-| E3 | Edit the opened file | Monaco `executeEdits` on that model | draft | rev | ✅ |
-| E4 | Deploy | `[data-test-id="deploy-button"]` "Задеплоить" | `DELETE /api/servers/{old}/`, `POST /api/servers/` → `trainerReducer.webserver.{id,url,running}` | rev | ✅ |
-| E5 | Read the rendered site | `GET {webserver.url}{path}` (public, no auth) | HTML | read | ✅ |
-| E6 | Refresh the preview | `[data-test-id="web-result-refresh-button"]` | — | read | 👁 |
-| E7 | Read the server log ("Терминал") | preview frame (cross-origin `…serverhub…/staticfiles/frame.html`): footer "Терминал" → xterm `.xterm-rows` | log websocket `…/servers/{id}/tools/logs/` | read | ✅ |
-| E8 | Check the solution | `[data-test-id="check-task-button"]` | redeploys, then `POST /api/backend/check_web_server_task/{taskId}/`, `POST /api/tasks/{taskId}/solutions/`; while running both buttons `disabled`; result in `playgroundResponse.test_result.{status,message,solved}`; pass = banner `.notification_type_success` + "Далее". Retry on `408.previewTimeout` | irrev | ✅ (pass + 408) |
-| E9 | Download the project | "Скачать проект" | zip | read | 👁 |
-
-## F. Platform AI ("Практикум ИИ")
-
-| # | Action | Locator | Result | Effect | Status |
-|---|---|---|---|---|---|
-| F1 | Open / close the chat | `[data-test-id="sidebar-gpt-button"]`; close `[data-test-id="yagpt-close-button"]` | `chatYaGPT.aiChatReducer.isChatOpened`. Sometimes takes 2 clicks, so loop until true. History is restored from the server after reload (`GET /api/gpt/chats/?lesson_id=…`) | read | ✅ |
-| F2 | Ask a question | `textarea.ai-chat__input` + `[data-test-id="ai-chat-submit"]` | SSE `POST /api/gpt/stream/ask_in_lesson/`; done when `isLoading=false` and last message `{type:"ai", isStreaming:false}` | irrev (creates/extends a chat) | ✅ |
-| F3 | Read suggested follow-ups | state `suggestions[]` (`POST /api/gpt/suggestion/`) | | read | ✅ |
-| F4 | Use a suggested question | `.ai-chat__suggestions button.ai-chat__suggestion-button` | **only fills the input** (`inputValue`, textarea); nothing is sent until `ai-chat-submit`. `button.ai-chat__scroll-to-suggestions-button` is just a hidden (opacity 0, `pointer-events:none`) "scroll to suggestions" shortcut. Suggestions can be junk (got "Я не могу обсуждать эту тему…") | rev | ✅ |
-| F5 | Start a new chat | `[data-test-id="yagpt-refresh-button"]` | `POST /api/gpt/chats/{chatId}/drop/` (204), so **the old chat is dropped** (not listed any more), then `GET /api/gpt/chats/…` → `[]` and `POST /api/gpt/suggestion/`; state `chatId:null`, `messages:[]` | irrev | ✅ |
-| F7 | Rate an AI answer | `[data-test-id="ai-answer-assesment-like"]` / `…-dislike` under each answer | | irrev | 👁 |
-| F8 | Save an AI answer to notes | `[data-test-id="yagpt-save-to-notes-icon-button"]` | | rev | 👁 |
-| F6 | AI lesson summary | `.trainer-theory__ai-summary-button` (trainer theory pane) | `aiHelperReducer` | irrev? | 👁 |
-
-## G. Present but not for the model
-
-Lesson/task/quiz rating thumbs (`*-thumb-up/down-rated-false`), "Оставить отзыв",
-theme switch, referral ("Подарок за друга"), support messenger ("Помощь"), notes
-(`sidebar-favorites-button`), copy-code buttons, image expand/download, user menu
-(contains logout and account switching).
+| C12 | Dialog quiz (`QuizChat`) | block `.quiz_type_chat`: bot bubbles `.chat__message_side_left`, student `…_side_right`; replies `[data-test-id="quiz-chat-answer-button-{answerId}"]` (text in `.quiz__chat-answer-content`). Clicking a reply marks it `quiz__chat-answer_used` + `aria-disabled`, adds `quiz__item_correct` (wrong: presumably `_incorrect`) and inline feedback `.quiz__chat-answer-feedback` («Верный ответ: …»), moves `.quiz__progress-bar` (`--progress`). Then **«Далее» `[data-test-id="quiz-chat-next-button"]` must be pressed** for the bot to post the next message; until then the other replies stay clickable | content `{state: {messageId: {on: {answerId: nextMessageId}}}, initial, messages: {id: {content, answers: {id: {content, isValid, feedback}}, orderList}}}`: a wrong reply leads back to the same message, a right one to the next question, the last message has no replies. ⚠️ `isValid`/feedback leak the key. Save request not captured yet | irrev (wrong replies can be retried) | ✅ reply + verdict, «Далее» logic from the DOM |
