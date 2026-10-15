@@ -5,7 +5,7 @@
  */
 import { ToolError } from '../../shared/protocol';
 import { highlight } from '../hud';
-import { press } from '../input';
+import { contextMenu, press, setText } from '../input';
 import { isVisible, pageWindow, plain, state, text } from '../page';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -156,7 +156,7 @@ export async function openFile(file: string): Promise<any> {
       await sleep(200);
       node = treeNames().find((n) => n.path === prefix);
     }
-    if (!node) throw new ToolError(`"${prefix}" is not in the project's file tree`);
+    if (!node) throw new ToolError(`"${prefix}" is not in the project's file tree (to add a new file use create_file)`);
     await press(node.el, isFile ? `open ${want}` : `${prefix}/`);
     await sleep(400);
   }
@@ -216,6 +216,80 @@ export async function setCode({ file, code }: { file?: string; code: string }): 
     if (norm(storedPane(path)!) !== norm(code)) throw new ToolError(`the editor shows the new ${path}, but the platform did not record it (it would not be deployed or checked)`);
   }
   return { file: path, previousLength };
+}
+
+const storedPaths = (): string[] => {
+  const panes: any[] = state()?.trainerReducer?.task?.panes ? Array.from(state().trainerReducer.task.panes) : [];
+  return panes.map((p) => String(p.name));
+};
+
+/** Pick an item of the context menu that is showing (every tree node has its own, hidden menu). */
+async function menuItem(text: string): Promise<HTMLElement> {
+  for (let i = 0; i < 20; i++) {
+    const item = [...document.querySelectorAll<HTMLElement>('.context-menu-default_visible .context-menu-default__item')].find(
+      (x) => (x.textContent ?? '').trim() === text,
+    );
+    if (item) return item;
+    await sleep(100);
+  }
+  throw new ToolError(`the file tree menu has no «${text}»`);
+}
+
+/** Right-click `parent` (a folder path, or '' for the project root), choose `what`, type `name`. */
+async function createNode(parent: string, name: string, what: 'Новый файл' | 'Новая папка'): Promise<void> {
+  let target: HTMLElement | null;
+  if (parent) {
+    target = treeNames().find((n) => n.path === parent)?.el ?? null;
+  } else {
+    target = document.querySelector<HTMLElement>('.files-tree__scrollable-wrapper');
+  }
+  if (!target) throw new ToolError(`folder "${parent}" is not in the file tree`);
+  await contextMenu(target, parent ? `${parent}/` : 'project');
+  await press(await menuItem(what), what);
+  let input: HTMLInputElement | null = null;
+  for (let i = 0; i < 20 && !input; i++) {
+    await sleep(100);
+    input = document.querySelector<HTMLInputElement>('input.files-tree__node-name-input');
+  }
+  if (!input) throw new ToolError('the name field did not appear');
+  await setText(input, name, 'name');
+  const form = input.closest('form') as HTMLFormElement | null;
+  if (!form) throw new ToolError('the name field has no form');
+  form.requestSubmit();
+}
+
+/**
+ * Create a project file through the file tree («Новый файл»), creating missing
+ * folders with «Новая папка». Some tasks require new files (e.g. about/urls.py).
+ */
+export async function createFile({ file }: { file: string }): Promise<{ file: string; created: boolean }> {
+  await closeTheory();
+  const path = file.replace(/^\/+/, '');
+  if (storedPaths().includes(path)) return { file: path, created: false };
+  const parts = path.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    const folder = parts.slice(0, i).join('/');
+    const exists = storedPaths().some((p) => p.startsWith(`${folder}/`)) || treeNames().some((n) => n.path === folder);
+    if (!exists) await createNode(parts.slice(0, i - 1).join('/'), parts[i - 1], 'Новая папка');
+    await sleep(400);
+  }
+  // expand the parent folder chain so the folder node is on screen
+  const parent = parts.slice(0, -1).join('/');
+  for (let i = 1; parent && i <= parts.length - 1; i++) {
+    const prefix = parts.slice(0, i).join('/');
+    if (treeNames().some((n) => n.path.startsWith(`${prefix}/`))) continue;
+    const node = treeNames().find((n) => n.path === prefix);
+    if (node) {
+      await press(node.el, `${prefix}/`);
+      await sleep(400);
+    }
+  }
+  await createNode(parent, parts[parts.length - 1], 'Новый файл');
+  for (let i = 0; i < 40; i++) {
+    if (storedPaths().includes(path)) return { file: path, created: true };
+    await sleep(150);
+  }
+  throw new ToolError(`created «${parts[parts.length - 1]}» but the project has no ${path}`);
 }
 
 /** Lesson tasks for opening a practice lesson at its first unsolved task. */

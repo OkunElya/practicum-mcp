@@ -65,3 +65,15 @@ export async function pressKey(target: HTMLElement, key: string): Promise<void> 
   fire(target, 'keydown', 'KeyboardEvent', init);
   fire(target, 'keyup', 'KeyboardEvent', init);
 }
+
+/** Right-click like a user (React `onContextMenu`), highlighted first. */
+export async function contextMenu(target: HTMLElement, label: string): Promise<void> {
+  await show(target, label);
+  const r = target.getBoundingClientRect();
+  const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 2, buttons: 2 };
+  fire(target, 'pointerdown', 'PointerEvent', { ...at, pointerId: 1, pointerType: 'mouse', isPrimary: true });
+  fire(target, 'mousedown', 'MouseEvent', at);
+  fire(target, 'contextmenu', 'MouseEvent', at);
+  fire(target, 'pointerup', 'PointerEvent', { ...at, buttons: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true });
+  fire(target, 'mouseup', 'MouseEvent', { ...at, buttons: 0 });
+}

@@ -456,6 +456,9 @@ Quiz answers were chosen by reasoning about the question, not by reading the lea
   for solved blocks (the solved attempt stays in `GET …/quizzes/`). Their run backend sometimes
   answers «Request took too long to execute; timeout occured» (no result panel); retrying or
   reloading helps (per the user, a load balancer may route to a dead server).
+- Local agent run on «Распределение адресов по приложениям»: task 1 solved (3 checks) by gpt-oss;
+  task 2 needs a new file `about/urls.py` (created by hand during inspection, empty); «View-функции:
+  от запроса до ответа» task 1: 4 failed checks, its `anfisa_for_friends/urls.py` left broken.
 - `trainerReducer.oldPlaygroundResponse` holds the latest serverless run **or** check result; a check
   adds `test_result` and a new `attempt_id`. `playgroundResponse` is the web_server check result.
 - Monaco objects reached through `wrappedJSObject` are raw page objects: passing content-script objects

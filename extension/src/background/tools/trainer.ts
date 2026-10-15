@@ -78,6 +78,19 @@ export const setCode: Tool = {
   },
 };
 
+export const createFile: Tool = {
+  spec: spec('create_file'),
+  async run(args, ctx) {
+    const r = await ctx.page.op<{ file: string; created: boolean }>('createFile', { file: args.file });
+    let msg = r.created ? `Created ${r.file}.` : `${r.file} already exists.`;
+    if (args.code) {
+      const w = await ctx.page.op<{ file: string; previousLength: number }>('setCode', { file: r.file, code: args.code });
+      msg += ` Wrote ${args.code.length} characters to ${w.file}.`;
+    }
+    return msg;
+  },
+};
+
 export const runCode: Tool = {
   spec: spec('run_code'),
   async run(_args, ctx) {

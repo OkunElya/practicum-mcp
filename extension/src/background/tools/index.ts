@@ -6,7 +6,7 @@ import { DEV_TOOLS } from './dev';
 import { completeLesson, goHome, openLesson } from './nav';
 import { getCode, getProgress, readLesson, readTask } from './read';
 import { answerQuiz, pressActionButton } from './theory';
-import { checkTask, deploy, fetchPreview, nextTask, runCode, setCode, showHint } from './trainer';
+import { checkTask, createFile, deploy, fetchPreview, nextTask, runCode, setCode, showHint } from './trainer';
 import { whereAmI } from './where';
 
 /** Set by `build.mjs --dev`. */
@@ -32,6 +32,7 @@ export const TOOLS: Tool[] = [
   resetCodeExercise,
   // code trainer
   setCode,
+  createFile,
   runCode,
   checkTask,
   showHint,

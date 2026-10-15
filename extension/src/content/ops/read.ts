@@ -151,7 +151,7 @@ export async function code({ file }: { file?: string }): Promise<CodeFile> {
     const panes: any[] = state()?.trainerReducer?.task?.panes ? Array.from(state().trainerReducer.task.panes) : [];
     // task.panes is the source of truth for which files exist; the tree may still be loading.
     const known = panes.some((p) => p.name === file || String(p.name).endsWith(`/${file}`));
-    if (!known) throw new ToolError(`no file "${file}". Files: ${panes.map((p) => p.name).join(', ') || 'none'}`);
+    if (!known) throw new ToolError(`no file "${file}" (use create_file to add it). Files: ${panes.map((p) => p.name).join(', ') || 'none'}`);
     model = await openFile(panes.find((p) => p.name === file || String(p.name).endsWith(`/${file}`)).name);
   }
   if (!model) throw new ToolError('no code editor on this page');

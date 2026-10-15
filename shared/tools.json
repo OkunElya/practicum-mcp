@@ -187,6 +187,23 @@
       }
     },
     {
+      "name": "create_file",
+      "description": "Create a new file in the trainer project (file tree «Новый файл»; missing folders are created too), optionally with its content. Use it when a task asks to create a file, e.g. about/urls.py.",
+      "effect": "rev",
+      "timeout_s": 60,
+      "params": {
+        "file": {
+          "type": "string",
+          "description": "path in the project, e.g. about/urls.py"
+        },
+        "code": {
+          "type": "string",
+          "description": "content to write into the new file",
+          "optional": true
+        }
+      }
+    },
+    {
       "name": "run_code",
       "description": "Run the program in the editor without checking it (Python tasks) and return exit code, stdout and stderr. Retries the platform's own errors.",
       "effect": "rev",
