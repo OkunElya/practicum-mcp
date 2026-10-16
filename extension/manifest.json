@@ -1,10 +1,13 @@
 {
   "manifest_version": 2,
   "name": "Practicum MCP",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lets an MCP client or a chat agent (via the local Python bridge) act in your Yandex Practicum tab, visibly and with your approval.",
   "browser_specific_settings": {
-    "gecko": { "id": "practicum-mcp@local", "strict_min_version": "128.0" }
+    "gecko": {
+      "id": "practicum-mcp@local",
+      "strict_min_version": "128.0"
+    }
   },
   "permissions": [
     "storage",
@@ -12,14 +15,44 @@
     "https://practicum.yandex.ru/*",
     "https://*.serverhub.praktikum-services.ru/*"
   ],
-  "background": { "scripts": ["background.js"], "persistent": true },
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "persistent": true
+  },
   "content_scripts": [
-    { "matches": ["https://practicum.yandex.ru/*"], "js": ["content.js"], "run_at": "document_idle" }
+    {
+      "matches": [
+        "https://practicum.yandex.ru/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
   ],
-  "browser_action": { "default_title": "Practicum MCP", "default_popup": "popup.html" },
+  "browser_action": {
+    "default_title": "Practicum MCP",
+    "default_popup": "popup.html",
+    "default_icon": "icon.svg"
+  },
   "sidebar_action": {
     "default_title": "Practicum",
     "default_panel": "sidebar.html",
-    "open_at_install": false
+    "open_at_install": false,
+    "default_icon": "icon.svg"
+  },
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
+  },
+  "commands": {
+    "_execute_sidebar_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+P"
+      },
+      "description": "Open or close the Practicum sidebar"
+    }
   }
 }

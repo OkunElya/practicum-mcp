@@ -34,7 +34,7 @@ async function refresh(): Promise<void> {
 
 const MODE_NOTE: Record<Mode, string> = {
   mcp: 'An MCP client drives; the overlay in the page shows its calls.',
-  agent: 'Chat with the agent in the sidebar; approvals are asked there too.',
+  agent: 'Chat with the agent in the sidebar (Alt+Shift+P); approvals are asked there too.',
 };
 
 function showMode(mode: Mode): void {
@@ -61,6 +61,10 @@ $('mode-agent').addEventListener('click', async () => {
   await saveSettings({ mode: 'agent' });
 });
 
+$('open-sidebar').addEventListener('click', () => {
+  void browser.sidebarAction.open();
+  window.close();
+});
 $('save').addEventListener('click', async () => {
   await saveSettings({ bridgeUrl: url.value.trim(), token: token.value.trim(), confirmIrreversible: confirm.checked }); // background reconnects on change
   setTimeout(refresh, 300);

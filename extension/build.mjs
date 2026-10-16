@@ -26,6 +26,7 @@ mkdirSync(out, { recursive: true });
 cpSync(join(root, 'manifest.json'), join(out, 'manifest.json'));
 cpSync(join(root, 'src/popup/popup.html'), join(out, 'popup.html'));
 cpSync(join(root, 'src/sidebar/sidebar.html'), join(out, 'sidebar.html'));
+cpSync(join(root, 'icons/icon.svg'), join(out, 'icon.svg'));
 
 const ctx = await esbuild.context({
   entryPoints: {

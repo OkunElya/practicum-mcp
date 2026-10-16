@@ -58,8 +58,9 @@ The toolbar popup (and the sidebar's header) switches between two modes.
 - **MCP**: a plain MCP server. Your MCP client drives. A small overlay in the corner of the
   Practicum tab shows the running tool, the log, **Stop** and **Approve / Deny**.
 - **Agent chat**: the bridge runs the agent itself, and you talk to it in the browser's
-  **sidebar**. Choosing *Agent chat* in the popup opens the sidebar; it also comes up from
-  *View → Sidebar → Practicum*. Everything moves there, approvals included, and the overlay
+  **sidebar**. Choosing *Agent chat* (or *Open sidebar*) in the popup opens the sidebar; so do
+  **Alt+Shift+P** (change it in `about:addons` → ⚙ → *Manage Extension Shortcuts*), the
+  Practicum icon in the browser's sidebar launcher, and *View → Sidebar → Practicum*. Everything moves there, approvals included, and the overlay
   stays hidden while a sidebar is open.
 
 The sidebar shows the session as one timeline, like Claude Code's side panel:
