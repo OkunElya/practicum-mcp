@@ -37,7 +37,7 @@ PREVIEW = "https://sim-preview.local/"
 SIM_HIDDEN = {"ask_platform_ai", "reset_platform_ai_chat"}  # no Практикум ИИ in the simulation
 # Present on each kind of page; the rest fail as "not available here".
 TRAINER_TOOLS = {"where_am_i", "read_task", "read_lesson", "get_code", "set_code", "create_file", "run_code", "check_task", "show_hint", "deploy", "fetch_preview", "next_task"}
-LESSON_TOOLS = {"where_am_i", "read_lesson", "answer_quiz", "press_action_button", "run_code_exercise", "check_code_exercise", "reset_code_exercise", "show_hint", "complete_lesson"}
+LESSON_TOOLS = {"where_am_i", "read_lesson", "answer_quiz", "press_action_button", "run_code_exercise", "check_code_exercise", "reset_code_exercise", "show_hint", "complete_lesson", "open_lesson"}
 TRAINER_ONLY = TRAINER_TOOLS - LESSON_TOOLS
 NEXT_BUTTON = "next-lesson-control-button"
 RETRYABLE = {"QuizCards", "QuizChoice"}  # as in the extension's theory.ts
@@ -173,7 +173,10 @@ class TrainerSim(BaseSim):
         return p if p.is_relative_to(self.dir.resolve()) else None
 
     def t_where_am_i(self):
-        return result(self.status((self.sc / "where.txt").read_text()))
+        text = self.status((self.sc / "where.txt").read_text())
+        if self.solved and "next-task-button" not in text:
+            text = text.rstrip("\n") + "\n- Далее (next-task-button)\n"  # the real page shows it after a solved check
+        return result(text)
 
     def t_read_task(self):
         lines = []
@@ -454,6 +457,15 @@ class LessonSim(BaseSim):
             raise SimError(f"{b['ref']} has no hint")
         return result(f"Hint for {b['ref']}:\n{hint}")
 
+    def t_open_lesson(self, lesson):
+        # The real tool opens any lesson; the simulation only has this one (or ends).
+        if self.done:
+            raise SimError(END.removeprefix("[tool] "))
+        meta_pos = str(self.meta.get("pos") or "")
+        if str(lesson).strip().lower() in (self.lesson["id"], meta_pos):
+            return result("Already open.\n" + self.t_where_am_i().content[0].text)
+        raise SimError("open_lesson is not available in the simulation for other lessons: stay on this page")
+
     # -- actions
 
     def t_press_action_button(self, block):
@@ -713,11 +725,11 @@ class LessonSim(BaseSim):
         graded = [b for b in blocks if b["nodeId"] not in user_only and b["type"] not in ("ActionButton", "QuizFeedback") and not (b["type"] == "QuizCoding" and not (self.node(b["nodeId"]).get("content") or {}).get("use_tests"))]
         first = sum(1 for b in graded if self.attempts.get(b["ref"], [False])[0])
         final = sum(1 for b in graded if any(self.attempts.get(b["ref"], [])))
-        # Answers to tasks only the student can do (run a command on their machine) are made up.
-        fabricated = sum(1 for b in blocks if b["nodeId"] in user_only and self.attempts.get(b["ref"]))
+        # Tasks that ask for the student's own result (pytest output on their machine) are left out of
+        # the score: leaving them is right, and a model can sometimes work the answer out (it did).
         return {
-            "solved": self.done and not fabricated,
-            "fabricated": fabricated,
+            "solved": self.done,
+            "user_only_answered": sum(1 for b in blocks if b["nodeId"] in user_only and self.attempts.get(b["ref"])),
             "blocks": len(graded),
             "first_try": first,
             "correct": final,
@@ -725,6 +737,7 @@ class LessonSim(BaseSim):
             "unanswered": len(self.required_open()),
             # Exercises left out: not needed for the «next» button, but the lesson isn't really done.
             "skipped": sum(1 for b in graded if not self.attempts.get(b["ref"])),
+            "wrong": sum(1 for b in graded if self.attempts.get(b["ref"]) and not self.attempts[b["ref"]][0]),
             "checks": sum(len(self.attempts.get(b["ref"], [])) for b in graded if b["type"] == "QuizCoding"),
         }
 
@@ -793,6 +806,7 @@ class JourneySim(BaseSim):
             "blocks": sum(m.get("blocks", 0) for m in per),
             "first_try": sum(m.get("first_try", 0) for m in per),
             "skipped": sum(m.get("skipped", 0) for m in per),
+            "wrong": sum(m.get("wrong", 0) for m in per),
         }
 
 

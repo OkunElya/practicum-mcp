@@ -270,3 +270,25 @@ def test_reading_the_open_lesson_by_id_counts_as_reading_it():
 
     assert asyncio.run(go()).code == 0
     assert [n for n, _ in c.calls] == ["read_lesson", "check_task"]
+
+
+def test_lesson_actions_go_to_the_solver_on_a_theory_lesson():
+    c, s = make([Turn([{"tool": "complete_lesson", "args": {}}], None, []), Turn([{"tool": "answer_quiz", "args": {"block": "q1", "answer": "2"}}], None, []), Turn([], "ok", [])])
+    c.url = "Page: theory lesson\nURL: https://practicum.yandex.ru/learn/x/lessons/l1/"
+    ran = []
+
+    async def fake_solver():
+        ran.append(1)
+        return "q1 answered «1»\ncomplete_lesson: not done"
+
+    s.local["solve_current_lesson"] = fake_solver
+
+    async def go():
+        await s.open()
+        s.page_text = c.url
+        s.where = "URL: https://practicum.yandex.ru/learn/x/lessons/l1/"
+        return await s.ask("пройди урок", 5)
+
+    assert asyncio.run(go()).code == 0
+    assert ran == [1]  # complete_lesson was routed to the solver
+    assert not any(n in ("complete_lesson", "answer_quiz") for n, _ in c.calls)  # and the agent's own answer refused after it

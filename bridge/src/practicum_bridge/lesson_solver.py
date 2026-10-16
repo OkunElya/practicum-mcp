@@ -26,6 +26,10 @@ AskUser = Callable[[str, str, list[str]], Awaitable[str | None]]  # (ref, block 
 HEAD = re.compile(r"^\[(q\d+) · (.+)\]\s*$", re.M)
 MORE = re.compile(r"…\((\d+) more characters: call again with offset=(\d+)\)\s*$")
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+# The platform lets these be answered again (a chat quiz repeats a wrongly answered question):
+# a majority guess is cheap there, so only one-attempt quizzes need agreeing samples.
+RETRYABLE = {"chat", "choice", "cards"}
+MARKS = re.compile(r"The page marks (\d+) correct, (\d+) incorrect")
 
 SYSTEM = """\
 You answer ONE question from a Yandex Practicum lesson (in Russian). You get the lesson text up to \
@@ -227,11 +231,15 @@ class LessonSolver:
             out.append(answer_of(b, reply))
         return out
 
-    async def decide(self, b: Block, ctx: str, lines: list[str]) -> str | None:
+    async def decide(self, b: Block, ctx: str, lines: list[str], extra: str = "") -> str | None:
         """An answer the samples agree on, after consulting Практикум ИИ if needed; else the user's, or None."""
-        votes = await self.sample(b, ctx)
+        votes = await self.sample(b, ctx, extra)
         self.note("solver", f"{b.ref} {b.kind}: samples {votes}")
         agreed = self.agreed(votes)
+        if agreed is None and b.kind in RETRYABLE:
+            usable = [v for v in votes if v and v != "\0user"]
+            if usable:
+                return Counter(usable).most_common(1)[0][0]  # a wrong answer can be corrected
         if agreed is None and self.consult:
             explanation = await self.ask_tutor(b)
             if explanation:
@@ -277,11 +285,12 @@ class LessonSolver:
         text = out.split("\nSuggested follow-up questions:")[0].strip()
         return text[:3000] or None
 
-    async def answer(self, b: Block, ans: str, lines: list[str]) -> bool:
-        out, err = await self.call("answer_quiz", {"block": b.ref, "answer": ans})
+    async def answer(self, b: Block, ans: str, lines: list[str], retry: bool = False) -> str | None:
+        """answer_quiz; the tool's output, or None when it failed."""
+        out, err = await self.call("answer_quiz", {"block": b.ref, "answer": ans, **({"retry": True} if retry else {})})
         verdict = next((l for l in out.splitlines() if l.startswith(("The page marks", "Verdict", "Correct", "Not correct"))), "")
         lines.append(f"{b.ref} {b.kind}: answered «{ans}»" + (f" → {verdict}" if verdict else "") if not err else f"{b.ref}: answer_quiz failed: {out[:200]}")
-        return not err
+        return None if err else out
 
     async def code(self, b: Block, ctx: str, lines: list[str]) -> None:
         """Write, run, and check a graded code exercise; up to three checks."""
@@ -340,7 +349,7 @@ class LessonSolver:
             elif b.kind == "chat":
                 for _ in range(12):  # one reply per question; a wrong reply may be retried
                     ans = await self.decide(b, ctx, lines)
-                    if not ans or not await self.answer(b, ans, lines):
+                    if not ans or await self.answer(b, ans, lines) is None:
                         left.add(b.ref)
                         break
                     b = next((x for x in parse_blocks(await self.read(blocks=True)) if x.ref == b.ref), b)
@@ -348,8 +357,18 @@ class LessonSolver:
                         break
             elif b.kind in ("radio", "checkbox", "choice", "cards", "macaroni", "text"):
                 ans = await self.decide(b, ctx, lines)
-                if not ans or not await self.answer(b, ans, lines):
+                out = await self.answer(b, ans, lines) if ans else None
+                if out is None:
                     left.add(b.ref)
+                for _ in range(2 if b.kind in RETRYABLE else 0):
+                    m = MARKS.search(out or "")
+                    if not m or m.group(2) == "0":
+                        break
+                    # Matching and cards can be answered again: retry with what the page showed.
+                    shown = (out or "").split("The quiz now shows:", 1)[-1].strip()[:1500]
+                    extra = f"Your previous answer «{ans}» got {m.group(1)} right and {m.group(2)} wrong. The page showed:\n{shown}\n\n"
+                    ans = await self.decide(b, ctx, lines, extra)
+                    out = await self.answer(b, ans, lines, retry=True) if ans else None
             else:
                 lines.append(f"{b.ref}: {b.kind} block, skipped")
                 left.add(b.ref)
@@ -359,7 +378,11 @@ class LessonSolver:
         out, err = await self.call("complete_lesson", {})
         lines.append(f"complete_lesson: {out.splitlines()[0] if out else ''}" if not err else f"complete_lesson not done: {out[:300]}")
         if not err and "\nNow:\n" in out:
-            lines.append("Now on:\n" + out.split("\nNow:\n", 1)[1][:600])
+            now = out.split("\nNow:\n", 1)[1]
+            lines.append("Now on:\n" + now[:600])
+            # Seen in a journey: the model opened the «Next lesson id» (the lesson after this one) and skipped it.
+            nxt = "call solve_current_lesson again" if "Page: theory lesson" in now else "read_task, then solve the task"
+            lines.append(f"This new page is the next one to do: {nxt}. Don't open_lesson the «Next lesson id»: that is the lesson after it.")
         return "\n".join(lines)
 
 

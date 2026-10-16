@@ -78,13 +78,13 @@ async def run_one(scenario: Path, model: str, ollama: str, temperature: float, t
 
 
 def by_scenario(rows: list[dict]) -> str:
-    out = ["scenario                          runs solved  first-try  skipped  pages  checks  rounds  tool-err  sec"]
+    out = ["scenario                          runs solved  first-try  wrong  skipped  pages  checks  rounds  tool-err  sec"]
     for sc in sorted({r["scenario"] for r in rows}):
         rs = [r for r in rows if r["scenario"] == sc]
         avg = lambda k: statistics.mean(r.get(k) or 0 for r in rs)  # noqa: E731
         ft = f"{sum(r.get('first_try', 0) for r in rs)}/{sum(r.get('blocks', 0) for r in rs)}" if any(r.get("blocks") for r in rs) else "-"
         pages = f"{sum(r.get('pages_done', 0) for r in rs)}/{sum(r.get('pages', 0) for r in rs)}" if any(r.get("pages") for r in rs) else "-"
-        out.append(f"{sc[:33]:<33} {len(rs):<4} {sum(bool(r['solved']) for r in rs)}/{len(rs):<5} {ft:<10} {sum(r.get('skipped', 0) for r in rs):<8} {pages:<6} {avg('checks'):<7.1f} {avg('rounds'):<7.0f} {avg('tool_errors'):<9.1f} {avg('seconds'):.0f}")
+        out.append(f"{sc[:33]:<33} {len(rs):<4} {sum(bool(r['solved']) for r in rs)}/{len(rs):<5} {ft:<10} {sum(r.get('wrong', 0) for r in rs):<6} {sum(r.get('skipped', 0) for r in rs):<8} {pages:<6} {avg('checks'):<7.1f} {avg('rounds'):<7.0f} {avg('tool_errors'):<9.1f} {avg('seconds'):.0f}")
     return "\n".join(out)
 
 

@@ -59,6 +59,9 @@ LOOP_STOP = 3
 # Actions that depend on what the page contains (block refs, files): read the page first.
 NEEDS_READ = {"answer_quiz", "press_action_button", "run_code_exercise", "check_code_exercise", "reset_code_exercise", "set_code", "create_file", "run_code", "check_task"}
 PAGE_READS = {"read_lesson", "read_task", "get_code"}
+# On a theory lesson these go to solve_current_lesson when the driver has it: the model, left to
+# itself, skipped quizzes with complete_lesson, answered by pattern or gave up.
+LESSON_ACTIONS = {"answer_quiz", "press_action_button", "complete_lesson", "run_code_exercise", "check_code_exercise"}
 
 
 def looks_patterned(answer: str) -> bool:
@@ -499,6 +502,8 @@ class Session:
         if solver and hasattr(backend, "structured"):
             self.local[SOLVE_TOOL["name"]] = self.solve_lesson
         self.ask_user = None  # async (ref, block text, candidates) -> answer | None; set by practicum-chat
+        self.solved_pages: set[str] = set()  # pages (URL lines) the lesson solver has worked through
+        self.task_solved_on: str | None = None  # the page whose check last said Solved
         self.tools: list = []
         self.known: set[str] = set()
         self.read_only: set[str] = set()
@@ -634,6 +639,18 @@ class Session:
                     # Later calls were planned without the result: at most one action per round.
                     done.append(Executed(c, "", False, stop_reason))
                     continue
+                solver = SOLVE_TOOL["name"]
+                on_lesson = self.page_text.startswith("Page: theory lesson")
+                if solver in self.local and on_lesson and c["tool"] in LESSON_ACTIONS:
+                    if self.where not in self.solved_pages:
+                        self.note("solver", f"{c['tool']} on a theory lesson → {solver}")
+                        c = {"tool": solver, "args": {}}
+                    elif c["tool"] in ("answer_quiz", "check_code_exercise"):
+                        done.append(Executed(c, "", True, "этот урок уже прошёл solve_current_lesson; блоки, которые он оставил, решает пользователь — перечисли их в итоге"))
+                        stop_reason = "предыдущий вызов не выполнен; посмотри результат и реши заново"
+                        continue
+                if c["tool"] == solver:
+                    self.solved_pages.add(self.where)
                 key = (c["tool"], json.dumps(c["args"], sort_keys=True))
                 if c["tool"] in NEEDS_READ and self.must_read:
                     # Seen live: after complete_lesson the model answered the old lesson's q4 on the new page.
@@ -657,7 +674,8 @@ class Session:
                     # The same read with the same result again (get_code 20 times in a tuning run).
                     self.refused += 1
                     self.note("repeat refused", f"{c['tool']} already returned the same result {same[2]} times in a row")
-                    done.append(Executed(c, "", True, f"ты уже {same[2]} раза подряд получил этот же результат; он не изменится — действуй на его основе"))
+                    hint = " Задача на этой странице уже решена: чтобы перейти к следующей, вызови next_task." if self.task_solved_on == self.where else ""
+                    done.append(Executed(c, "", True, f"ты уже {same[2]} раза подряд получил этот же результат; он не изменится — действуй на его основе.{hint}"))
                     if self.refused >= LOOP_STOP:
                         self.note("stopped", "the model keeps repeating the same call; handing back to the user")
                         halted = 4
@@ -713,6 +731,8 @@ class Session:
                 if c["tool"] in CHECK_TOOLS and not err:
                     key = check_key
                     self.failed_check = None if out.startswith("Solved") else key
+                    if out.startswith("Solved"):
+                        self.task_solved_on = self.where
                     self.failed_checks[key] = 0 if out.startswith("Solved") else self.failed_checks.get(key, 0) + 1
                     if self.failed_checks[key] >= MAX_FAILED_CHECKS:
                         self.note("stopped", f"{MAX_FAILED_CHECKS} failed checks in a row on this task; handing back to the user")
