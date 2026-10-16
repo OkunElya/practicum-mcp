@@ -23,6 +23,7 @@ from pathlib import Path
 
 from mcp.client import Client
 
+from .agent_link import PageChannel
 from .call import drop_proxies_for_loopback
 from .platform_agent import OllamaBackend, Outcome, PlatformBackend, Session, visible
 
@@ -132,6 +133,9 @@ class Chat:
         self.session, self.console, self.rounds = session, console, rounds
         self.backend = session.backend
         self.running: asyncio.Task | None = None
+        # Messages from the terminal and from the page overlay, in arrival order: (source, text | None at EOF).
+        self.inbox: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue()
+        self.want_input = asyncio.Event()  # the terminal is read only while idle or asked a question
 
     def on_sigint(self) -> None:
         if self.running and not self.running.done():
@@ -168,6 +172,38 @@ class Chat:
                 continue
             lines.append(line)
             return "\n".join(lines).strip()
+
+    async def _terminal(self) -> None:
+        while True:
+            await self.want_input.wait()
+            line = await self.read()
+            self.want_input.clear()
+            await self.inbox.put(("term", line))
+            if line is None:
+                return
+
+    async def _page(self, overlay: PageChannel) -> None:
+        while True:
+            await self.inbox.put(("page", await overlay.said.get()))
+
+    async def next_input(self) -> tuple[str, str | None]:
+        self.want_input.set()
+        src, line = await self.inbox.get()
+        self.want_input.clear()
+        if src == "page" and line:
+            print(self.console.paint("1;32", "page›") + f" {line}", flush=True)
+        return src, line
+
+    async def ask_user(self, ref: str, block: str, candidates: list[str]) -> str | None:
+        """Terminal fallback for the lesson solver's questions (the overlay asks first when it is open)."""
+        self.console._end_stream()
+        print(self.console.paint("1;33", f"\nThe lesson solver isn't sure about {ref}:"))
+        print(block[:2500])
+        if candidates:
+            print(self.console.paint("2", "Model's candidates: " + " / ".join(f"«{c}»" for c in candidates)))
+        print(f"Your answer for {ref} (as for answer_quiz; an empty line leaves it):", flush=True)
+        _, line = await self.next_input()
+        return (line or "").strip() or None
 
     async def command(self, line: str) -> bool:
         """Handle a /command; False means quit."""
@@ -257,8 +293,17 @@ class Chat:
         loop.add_signal_handler(signal.SIGINT, self.on_sigint)
         name = self.backend.name
         print(self.console.paint("2", f"Chatting with {name} — {len(self.session.known)} tools, page {self.session.where.removeprefix('URL: ')}. /help for commands."))
+        readers = [asyncio.ensure_future(self._terminal())]
+        if self.session.overlay is not None and self.session.overlay.connected:
+            readers.append(asyncio.ensure_future(self._page(self.session.overlay)))
+            print(self.console.paint("2", "The page overlay shows this chat; you can also type there."))
+            self.session.show("idle", "waiting for your message")
         while True:
-            line = await self.read()
+            src, line = await self.next_input()
+            if line is None and src == "term" and len(readers) > 1:
+                # No terminal (started in the background, or Ctrl+D): the overlay still talks to us.
+                print(self.console.paint("2", "(terminal input closed; still taking messages from the page overlay — Ctrl+C twice to quit)"), flush=True)
+                continue
             if line is None:
                 print()
                 return
@@ -270,6 +315,7 @@ class Chat:
                 continue
             self.console.log.write(f"\n[{time.strftime('%H:%M:%S')}] ── you ──\n{line}\n")
             await self.run_task(self.session.ask(line, self.rounds))
+            self.session.show("idle", "waiting for your message")
 
 
 def setup_readline() -> None:
@@ -305,20 +351,17 @@ async def amain(a: argparse.Namespace) -> int:
             backend = OllamaBackend(console, a.model, a.ollama, a.num_ctx, a.temperature, a.think, None if a.no_stream else console.stream)
         console.model_kinds.add(backend.name)
 
-        async def ask_user(ref: str, block: str, candidates: list[str]) -> str | None:
-            console._end_stream()
-            print(console.paint("1;33", f"\nThe lesson solver isn't sure about {ref}:"))
-            print(block[:2500])
-            if candidates:
-                print(console.paint("2", "Model's candidates: " + " / ".join(f"«{c}»" for c in candidates)))
-            line = await asyncio.to_thread(input, f"Your answer for {ref} (as for answer_quiz; Enter to leave it): ")
-            return line.strip() or None
         session = Session(client, backend, console, solver=not a.no_solver)
-        session.ask_user = ask_user
+        overlay = PageChannel(f"{backend.name} (chat)", chat=True)
+        if await overlay.open():
+            session.overlay = overlay
         if not await session.open():
             return 1
         # gpt-oss makes one call per reply: a simple trainer task takes 14-19 rounds.
-        await Chat(session, console, a.rounds or (10 if a.platform else 30)).loop()
+        chat = Chat(session, console, a.rounds or (10 if a.platform else 30))
+        session.ask_user = chat.ask_user
+        await chat.loop()
+        await overlay.close()
     return 0
 
 

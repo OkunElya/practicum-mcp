@@ -25,6 +25,7 @@ const link = new BridgeLink(
   (msg: BridgeIn) => {
     if (msg.type === 'call') router.call(msg.id, msg.tool, msg.args);
     else if (msg.type === 'cancel') router.cancel(msg.id);
+    else if (msg.type === 'agent') activity.onAgent(msg.event);
   },
   (status, detail) => {
     void browser.browserAction.setBadgeText({ text: BADGE[status].text });
@@ -35,7 +36,10 @@ const link = new BridgeLink(
       activity.log(status === 'connected' ? 'ok' : 'error', status === 'connected' ? 'bridge connected' : `bridge ${status}`);
     }
     // A dead bridge can't receive results; don't leave the user's page being driven blind.
-    if (status !== 'connected' && status !== 'connecting') router.stopAll();
+    if (status !== 'connected' && status !== 'connecting') {
+      router.stopAll();
+      activity.onAgent({ kind: 'gone' }); // no bridge, no agent channel
+    }
   },
 );
 
@@ -53,6 +57,13 @@ browser.runtime.onMessage.addListener((msg: unknown) => {
       return Promise.resolve(activity.state());
     case 'reconnect':
       link.start(settings);
+      break;
+    case 'agent_say':
+      link.send({ type: 'agent_input', input: { kind: 'say', text: req.text } });
+      break;
+    case 'agent_answer':
+      link.send({ type: 'agent_input', input: { kind: 'answer', id: req.id, text: req.text } });
+      activity.questionAnswered(req.id);
       break;
   }
   return Promise.resolve<StatusReply>({ status: link.status, detail: link.detail, tools: router.specs().length, hud: activity.state() });

@@ -199,3 +199,41 @@ def test_platform_agent_ignores_fenced_examples():
 
     calls, answer, bad = parse_reply("Например:\n```\nCALL {get_version()}\n```\n```\nANSWER: v1.2.3\n```\nУдачи!")
     assert (calls, answer, bad) == ([], None, [])
+
+
+def test_agent_channel_relays_both_ways_and_rejects_browsers():
+    async def main():
+        async with bridge() as (link, url):
+            # A browser page (any Origin) can't pose as an agent.
+            with pytest.raises(InvalidStatus):
+                await connect(f"{url}/agent", origin="https://evil.example")
+            # Nor can a local process without the token.
+            bad = await connect(f"{url}/agent")
+            await bad.send(json.dumps({"type": "agent_hello", "token": "nope"}))
+            with pytest.raises(ConnectionClosed):
+                await bad.recv()
+
+            agent = await connect(f"{url}/agent")
+            await agent.send(json.dumps({"type": "agent_hello", "token": TOKEN, "name": "test agent", "chat": True}))
+            assert json.loads(await agent.recv()) == {"type": "welcome"}
+            await agent.send(json.dumps({"type": "agent_event", "event": {"kind": "status", "state": "thinking", "text": "round 1"}}))
+            await asyncio.sleep(0.05)
+
+            # An extension that connects later gets the agent and its status replayed.
+            seen = []
+            ext, loop = await fake_extension(url, lambda m: seen.append(m))
+            await wait_connected(link)
+            await agent.send(json.dumps({"type": "agent_event", "event": {"kind": "message", "role": "agent", "text": "Готово"}}))
+            await ext.send(json.dumps({"type": "agent_input", "input": {"kind": "say", "text": "пройди урок"}}))
+            assert json.loads(await agent.recv()) == {"type": "agent_input", "input": {"kind": "say", "text": "пройди урок"}}
+            await asyncio.sleep(0.05)
+            events = [m["event"] for m in seen if m["type"] == "agent"]
+            assert events[0] == {"kind": "hello", "name": "test agent", "chat": True}
+            assert events[1]["state"] == "thinking" and events[2]["text"] == "Готово"
+            await agent.close()
+            await asyncio.sleep(0.05)
+            assert seen[-1] == {"type": "agent", "event": {"kind": "gone"}}
+            loop.cancel()
+            await ext.close()
+
+    run(main())

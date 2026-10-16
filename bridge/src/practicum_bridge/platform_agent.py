@@ -41,6 +41,7 @@ from mcp.client import Client
 from .call import drop_proxies_for_loopback
 from types import SimpleNamespace
 
+from .agent_link import PageChannel
 from .lesson_solver import SOLVE_TOOL, LessonSolver
 from .prompts import LOCAL_PAGE, LOCAL_SOLVER, LOCAL_SYSTEM, PLATFORM_INTRO
 
@@ -559,6 +560,7 @@ class Session:
         self.idle = 0  # rounds since the last progress
         self.stall_warned = False
         self.ask_user = None  # async (ref, block text, candidates) -> answer | None; set by practicum-chat
+        self.overlay = None  # PageChannel: shows status, messages and questions in the extension's overlay
         self.solved_pages: set[str] = set()  # pages (URL lines) the lesson solver has worked through
         self.task_solved_on: str | None = None  # the page whose check last said Solved
         self.tools: list = []
@@ -615,6 +617,14 @@ class Session:
         r = await self.client.call_tool(tool, clean_args(args))
         return text_of(r), bool(r.is_error)
 
+    def show(self, state: str, text: str = "") -> None:
+        if self.overlay is not None:
+            self.overlay.status(state, text)
+
+    def say(self, role: str, text: str) -> None:
+        if self.overlay is not None and text:
+            self.overlay.message(role, text)
+
     async def finish(self, args: dict) -> str:
         status = str(args.get("status") or "done")
         status = status if status in ("done", "blocked", "needs_user") else "done"
@@ -667,7 +677,8 @@ class Session:
             r = await self.client.call_tool(tool, clean_args(args))
             return text_of(r), bool(r.is_error)
 
-        solver = LessonSolver(bridge_call, self.backend, self.note, self.ask_user)
+        asker = self.page_question if (self.overlay is not None or self.ask_user) else None
+        solver = LessonSolver(bridge_call, self.backend, self.note, asker)
         report = await solver.solve()
         # Models lose count across lessons ("3 lessons done" after 2): give them the driver's count.
         done = sum(1 for l in self.ledger if "marked solved" in l) + report.count("marked solved")
@@ -695,6 +706,7 @@ class Session:
         return await self.backend.reset()
 
     async def ask(self, text: str, rounds: int) -> Outcome:
+        self.say("user", text)
         now = await self.page()
         changed = now != self.where
         if changed:
@@ -718,16 +730,32 @@ class Session:
         self.backend.user(text, changed, self.page_text)
         return await self.resume(rounds)
 
+    async def page_question(self, ref: str, block: str, candidates: list[str]) -> str | None:
+        """The solver's question for the user: in the overlay if it is there, else the local ask_user."""
+        if self.overlay is not None and self.overlay.connected:
+            got = await self.overlay.ask(ref, block, candidates)
+            self.show("thinking", "")
+            return got
+        return await self.ask_user(ref, block, candidates) if self.ask_user else None
+
     async def resume(self, rounds: int) -> Outcome:
-        out = await self._loop(rounds)
+        try:
+            out = await self._loop(rounds)
+        except asyncio.CancelledError:
+            self.show("stopped", "interrupted")
+            raise
         reasons = {0: "задача завершена моделью", 1: "сбой модели или моста", 2: "кончился лимит ходов", 3: "проверка не прошла 3 раза подряд", 4: "модель повторяла одно и то же", 5: "нет продвижения"}
         out.facts = self.facts(reasons.get(out.code, str(out.code)))
         self.note("driver summary", out.facts)
+        self.say("agent", (f"[{out.status}] " if out.status else "") + (out.answer or ""))
+        self.say("note", out.facts)
+        self.show("done" if out.code == 0 else "stopped", reasons.get(out.code, ""))
         return out
 
     async def _loop(self, rounds: int) -> Outcome:
         for rnd in range(1, rounds + 1):
             self.note("round", str(rnd))
+            self.show("thinking", f"round {rnd}" + (f" · no progress for {self.idle}" if self.idle >= 3 else ""))
             turn = await self.backend.turn()
             if turn is None:
                 return Outcome(1)
@@ -841,6 +869,7 @@ class Session:
                     out, err = f"инструмент {c['tool']!r} недоступен", True
                 else:
                     try:
+                        self.show("acting", f"{c['tool']}({short(json.dumps(c['args'], ensure_ascii=False), 80)})")
                         out, err = await self.call(c["tool"], c["args"])
                     except asyncio.CancelledError:
                         done.append(Executed(c, "", True, INTERRUPTED + " (результат неизвестен)"))
@@ -924,9 +953,13 @@ async def run(task: str, rounds: int, url: str, log_path: Path, make_backend: Ca
     note = log_note(log_path)
     async with Client(url) as client:
         session = Session(client, make_backend(client, note), note, solver)
+        overlay = PageChannel(f"{session.backend.name} (one task)", chat=False)
+        if await overlay.open():
+            session.overlay = overlay  # status, messages and the solver's questions in the page overlay
         if not await session.open():
             return 1
         out = await session.ask(task, rounds)
+        await overlay.close()
         if out.code == 0:
             # The model's summary can be wrong; log what the page actually says.
             note("actual state", text_of(await client.call_tool("where_am_i", {})))

@@ -1,4 +1,4 @@
-import type { HudState } from './hud';
+import type { AgentEvent, AgentInput, HudState } from './hud';
 
 /** Why a call failed, so the model can decide whether to retry. */
 export type ErrorKind =
@@ -20,13 +20,15 @@ export class ToolError extends Error {
 export type BridgeIn =
   | { type: 'welcome' }
   | { type: 'call'; id: string; tool: string; args: unknown }
-  | { type: 'cancel'; id: string };
+  | { type: 'cancel'; id: string }
+  | { type: 'agent'; event: AgentEvent };
 
 export type BridgeOut =
   | { type: 'hello'; token: string; version: string; tools: unknown[] }
   | { type: 'progress'; id: string; text: string }
   | { type: 'result'; id: string; ok: true; output: string }
-  | { type: 'result'; id: string; ok: false; error: string; kind: ErrorKind };
+  | { type: 'result'; id: string; ok: false; error: string; kind: ErrorKind }
+  | { type: 'agent_input'; input: AgentInput };
 
 // background -> content script (runtime messages)
 export interface PageRequest {

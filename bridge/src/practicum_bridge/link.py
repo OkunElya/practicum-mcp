@@ -10,6 +10,17 @@ sends it tool calls. Protocol (JSON text frames):
     ext -> bridge  {"type": "progress", "id", "text"}
     ext -> bridge  {"type": "result", "id", "ok": true, "output"}
                    {"type": "result", "id", "ok": false, "error", "kind"}
+
+An agent driver (practicum-chat, practicum-local-agent) may connect at /agent, so
+the on-page overlay can show what it does and pass the user's messages back:
+
+    agent -> bridge  {"type": "agent_hello", "token", "name", "chat": bool}
+    bridge -> agent  {"type": "welcome"}
+    agent -> bridge  {"type": "agent_event", "event": {...}}   relayed: bridge -> ext {"type": "agent", "event"}
+    ext -> bridge    {"type": "agent_input", "input": {...}}   relayed: bridge -> agent {"type": "agent_input", "input"}
+
+Browsers always send an Origin header, so /agent only accepts clients without one
+(local processes), and they need the token too.
 """
 
 import asyncio
@@ -56,6 +67,9 @@ class ExtensionLink:
         self._background: set[asyncio.Task] = set()
         self.port: int | None = None
         self.listening = asyncio.Event()
+        self._agent: ServerConnection | None = None
+        self._agent_hello: dict | None = None  # replayed to an extension that connects later
+        self._agent_status: dict | None = None
 
     def _spawn(self, coro: Awaitable[None]) -> None:
         # Keep a reference so fire-and-forget tasks aren't garbage-collected mid-flight.
@@ -78,12 +92,62 @@ class ExtensionLink:
 
     @staticmethod
     def _check_origin(conn: ServerConnection, request: Request) -> Response | None:
-        # Web pages can open WebSockets to localhost too; only extensions may connect.
-        if not request.headers.get("Origin", "").startswith("moz-extension://"):
+        # Web pages can open WebSockets to localhost too; only extensions may connect,
+        # and on /agent only local processes (no Origin header at all).
+        origin = request.headers.get("Origin")
+        if request.path == "/agent":
+            return conn.respond(403, "agents connect without an Origin header\n") if origin is not None else None
+        if not (origin or "").startswith("moz-extension://"):
             return conn.respond(403, "only the Practicum MCP extension may connect\n")
         return None
 
+    async def _send_ext(self, msg: dict) -> None:
+        if self._conn is not None:
+            try:
+                await self._conn.send(json.dumps(msg))
+            except ConnectionClosed:
+                pass
+
+    async def _handle_agent(self, conn: ServerConnection) -> None:
+        try:
+            hello = json.loads(await asyncio.wait_for(conn.recv(), 10))
+        except (TimeoutError, ValueError, ConnectionClosed):
+            await conn.close(4400, "expected agent_hello")
+            return
+        token = str(hello.get("token", "")) if isinstance(hello, dict) else ""
+        if hello.get("type") != "agent_hello" or not hmac.compare_digest(token.encode(), self._token.encode()):
+            await conn.close(4401, "bad token")
+            return
+        if self._agent is not None:
+            await self._agent.close(4000, "replaced by a newer agent")
+        self._agent = conn
+        self._agent_hello = {"kind": "hello", "name": str(hello.get("name", "agent")), "chat": bool(hello.get("chat"))}
+        self._agent_status = None
+        await conn.send(json.dumps({"type": "welcome"}))
+        await self._send_ext({"type": "agent", "event": self._agent_hello})
+        log.info("agent %s connected", self._agent_hello["name"])
+        try:
+            async for raw in conn:
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(msg, dict) and msg.get("type") == "agent_event" and isinstance(msg.get("event"), dict):
+                    if msg["event"].get("kind") == "status":
+                        self._agent_status = msg["event"]
+                    await self._send_ext({"type": "agent", "event": msg["event"]})
+        except ConnectionClosed:
+            pass
+        finally:
+            if self._agent is conn:
+                self._agent = self._agent_hello = self._agent_status = None
+                await self._send_ext({"type": "agent", "event": {"kind": "gone"}})
+                log.info("agent disconnected")
+
     async def _handle(self, conn: ServerConnection) -> None:
+        if conn.request is not None and conn.request.path == "/agent":
+            await self._handle_agent(conn)
+            return
         try:
             hello = json.loads(await asyncio.wait_for(conn.recv(), 10))
         except (TimeoutError, ValueError, ConnectionClosed):
@@ -102,6 +166,9 @@ class ExtensionLink:
         self.version = hello.get("version")
         await conn.send(json.dumps({"type": "welcome"}))
         log.info("extension %s connected", self.version)
+        for event in (self._agent_hello, self._agent_status):  # an agent that was already running
+            if event:
+                await conn.send(json.dumps({"type": "agent", "event": event}))
 
         try:
             async for raw in conn:
@@ -124,6 +191,13 @@ class ExtensionLink:
             pending = self._pending.get(str(msg.get("id")))
         except (ValueError, AttributeError):
             log.warning("ignoring malformed message from the extension")
+            return
+        if msg.get("type") == "agent_input":
+            if self._agent is not None and isinstance(msg.get("input"), dict):
+                try:
+                    await self._agent.send(json.dumps({"type": "agent_input", "input": msg["input"]}))
+                except ConnectionClosed:
+                    pass
             return
         if pending is None or pending.future.done():
             return

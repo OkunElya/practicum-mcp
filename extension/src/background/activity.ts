@@ -1,9 +1,10 @@
-import type { HudState, LogEntry, LogLevel } from '../shared/hud';
+import type { AgentEvent, AgentView, HudState, LogEntry, LogLevel } from '../shared/hud';
 import { ToolError } from '../shared/protocol';
 
 const KEEP = 50;
 const SHOW = 8;
 const CONFIRM_TIMEOUT_MS = 120_000;
+const KEEP_MESSAGES = 40;
 
 /**
  * Everything the user should see: the action log, the running tool, the queue
@@ -15,6 +16,7 @@ export class Activity {
   queued = 0;
   private entries: LogEntry[] = [];
   private confirmReq: { id: string; text: string; resolve: (ok: boolean) => void } | null = null;
+  private agent: AgentView | null = null;
   private nextConfirmId = 1;
 
   log(level: LogLevel, text: string): void {
@@ -35,7 +37,31 @@ export class Activity {
       queued: this.queued,
       entries: this.entries.slice(-SHOW),
       confirm: this.confirmReq && { id: this.confirmReq.id, text: this.confirmReq.text },
+      agent: this.agent,
     };
+  }
+
+  /** What the agent driver reports through the bridge. */
+  onAgent(ev: AgentEvent): void {
+    if (ev.kind === 'hello') {
+      this.agent = { name: ev.name, chat: ev.chat, state: 'idle', text: '', messages: [], question: null };
+    } else if (ev.kind === 'gone') {
+      this.agent = null;
+    } else if (this.agent) {
+      if (ev.kind === 'status') Object.assign(this.agent, { state: ev.state, text: ev.text });
+      else if (ev.kind === 'message') {
+        this.agent.messages.push({ t: Date.now(), role: ev.role, text: ev.text });
+        this.agent.messages.splice(0, Math.max(0, this.agent.messages.length - KEEP_MESSAGES));
+      } else if (ev.kind === 'question') this.agent.question = { id: ev.id, ref: ev.ref, text: ev.text, candidates: ev.candidates };
+      else if (ev.kind === 'question_closed' && this.agent.question?.id === ev.id) this.agent.question = null;
+    }
+    this.push();
+  }
+
+  /** The user answered the agent's question in some tab: hide it everywhere right away. */
+  questionAnswered(id: string): void {
+    if (this.agent?.question?.id === id) this.agent.question = null;
+    this.push();
   }
 
   /**
