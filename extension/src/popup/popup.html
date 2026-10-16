@@ -21,11 +21,20 @@
     #log { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow: auto; color: var(--muted); }
     #log li { overflow-wrap: anywhere; }
     #log .error { color: var(--bad); } #log .ok { color: var(--ok); }
+    .modes { display: flex; border: 1px solid #8886; border-radius: 6px; overflow: hidden; margin-bottom: 4px; }
+    .modes button { border: 0; border-radius: 0; background: transparent; padding: 6px; }
+    .modes button[aria-pressed=true] { background: #1a5fb4; color: #fff; font-weight: 600; }
+    .note { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
   </style>
 </head>
 <body>
   <h1>Practicum MCP</h1>
   <div id="status">…</div>
+  <div class="modes" role="group" aria-label="Mode">
+    <button id="mode-mcp" aria-pressed="false" title="An MCP client (Claude Code, …) drives; a small overlay in the page shows its calls">MCP</button>
+    <button id="mode-agent" aria-pressed="false" title="The bridge runs the agent; chat with it in the sidebar">Agent chat</button>
+  </div>
+  <div class="note" id="mode-note"></div>
   <label for="url">Bridge URL</label>
   <input id="url" type="text" spellcheck="false">
   <label for="token">Token (printed by the bridge on start)</label>

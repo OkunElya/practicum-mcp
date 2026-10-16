@@ -1,6 +1,7 @@
 import { coerceArgs } from '../shared/args';
 import { ToolError, type BridgeOut } from '../shared/protocol';
 import type { ToolSpec } from '../shared/specs';
+import type { CallSource } from '../shared/transcript';
 import type { Activity } from './activity';
 import { PageSession, targetTab } from './page';
 import type { Settings } from './settings';
@@ -48,9 +49,10 @@ export class Router {
     return [...this.tools.values()].map((t) => t.spec);
   }
 
-  call(id: string, name: string, rawArgs: unknown): void {
+  call(id: string, name: string, rawArgs: unknown, source: CallSource = 'mcp'): void {
     const abort = new AbortController();
     this.calls.set(id, abort);
+    this.activity.tool({ kind: 'tool_queued', callId: id, name, args: rawArgs, source });
     this.activity.set({ queued: this.calls.size - 1 });
     this.tail = this.tail.then(() => this.run(id, name, rawArgs, abort));
   }
@@ -70,6 +72,7 @@ export class Router {
   private async run(id: string, name: string, rawArgs: unknown, abort: AbortController): Promise<void> {
     const fail = (kind: ToolError['kind'], error: string) => {
       this.activity.log('error', `${name}: ${error}`);
+      this.activity.tool({ kind: 'tool_done', callId: id, ok: false, error, errorKind: kind });
       this.send({ type: 'result', id, ok: false, kind, error });
     };
     try {
@@ -81,6 +84,7 @@ export class Router {
       const shownArgs = Object.values(args).map((v) => clip(String(v), 40)).join(', ');
       this.activity.set({ current: `${name}(${shownArgs})` });
       this.activity.log('run', `${name}(${shownArgs})`);
+      this.activity.tool({ kind: 'tool_running', callId: id, args });
 
       const tab = await targetTab();
       const ctx: ToolContext = {
@@ -88,15 +92,17 @@ export class Router {
         page: new PageSession(tab.id!, abort.signal),
         step: (text) => {
           this.activity.log('step', text);
+          this.activity.tool({ kind: 'tool_step', callId: id, text });
           this.send({ type: 'progress', id, text });
         },
       };
       if (tool.spec.effect === 'irrev' && this.settings().confirmIrreversible) {
         const what = tool.describe ? await tool.describe(args, ctx) : `${name}(${shownArgs})`;
-        await this.activity.confirm(what, abort.signal);
+        await this.activity.confirm(what, abort.signal, id);
       }
       const output = await tool.run(args, ctx);
       this.activity.log('ok', `${name}: done`);
+      this.activity.tool({ kind: 'tool_done', callId: id, ok: true, output });
       this.send({ type: 'result', id, ok: true, output: truncate(output) });
     } catch (e) {
       if (abort.signal.aborted) fail('stopped', `${name} was stopped by the user`);

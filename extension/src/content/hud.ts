@@ -1,9 +1,10 @@
 /**
- * On-page overlay: what the agent is doing (its state, messages and a chat input
- * when it takes messages), the tool log, a Stop button, and at the bottom what
- * needs the user: the agent's questions and approval prompts. Also draws a
- * highlight box around the element about to be used. Lives in a closed shadow
- * root so page styles can't break it (and vice versa).
+ * On-page overlay for MCP mode: the running tool, the tool log, a Stop button, and
+ * at the bottom what needs the user (approval prompts, a connected agent's
+ * questions). In agent mode the sidebar shows all of that and the overlay stays
+ * hidden while a sidebar is open. Also draws a highlight box around the element
+ * about to be used (in both modes). Lives in a closed shadow root so page styles
+ * can't break it (and vice versa).
  */
 import type { AgentState, AgentView, HudRequest, HudState, LogLevel } from '../shared/hud';
 
@@ -36,21 +37,13 @@ button { flex: 1; font: inherit; padding: 4px 6px; border-radius: 5px; border: 1
 button.stop { border-color: var(--err); color: var(--err); font-weight: 600; }
 button.approve { border-color: var(--ok); color: var(--ok); font-weight: 600; }
 button.deny { border-color: var(--err); color: var(--err); }
-.agent { margin-bottom: 6px; }
 .state { display: flex; gap: 6px; align-items: baseline; font-weight: 600; margin-bottom: 4px; }
 .state small { font-weight: 400; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state.thinking, .state.acting { color: var(--run); } .state.waiting_user { color: var(--ask); }
 .state.done { color: var(--ok); } .state.stopped { color: var(--err); } .state.idle { color: var(--muted); }
 .state.thinking .icon { animation: pulse 1s infinite; }
-.chat { max-height: 200px; overflow: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
-.msg { padding: 4px 6px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
-.msg.user { align-self: flex-end; background: color-mix(in srgb, var(--run) 15%, transparent); max-width: 85%; }
-.msg.agent { background: color-mix(in srgb, var(--fg) 6%, transparent); }
-.msg.note { color: var(--muted); font-size: 11px; border-left: 2px solid var(--line); border-radius: 0; }
-textarea, input { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; box-sizing: border-box; }
-textarea { flex: 3; resize: vertical; min-height: 28px; max-height: 120px; }
-input { flex: 3; min-width: 0; }
-.label { color: var(--muted); font-size: 11px; margin: 6px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
+input { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; box-sizing: border-box; flex: 3; min-width: 0; }
+.hint { color: var(--muted); margin-bottom: 6px; }
 .question { margin-top: 6px; padding: 6px; border-radius: 6px; background: color-mix(in srgb, var(--ask) 15%, transparent); }
 .question p { margin: 0 0 4px; font-weight: 600; }
 .question pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 140px; overflow: auto; font: inherit; }
@@ -66,7 +59,6 @@ let root: ShadowRoot | null = null;
 let collapsed = true;
 let last: HudState | null = null;
 // What the user is typing survives re-renders (the whole overlay is redrawn on every change).
-let draft = '';
 let answerDraft = '';
 
 const STATE: Record<AgentState, [string, string]> = {
@@ -102,46 +94,11 @@ function send(msg: HudRequest): void {
   void browser.runtime.sendMessage(msg).catch(() => {});
 }
 
-function agentSection(a: AgentView): HTMLElement {
-  const sec = el('div', 'agent');
+function agentLine(a: AgentView): HTMLElement {
   const [icon, word] = STATE[a.state] ?? ['·', a.state];
   const st = el('div', `state ${a.state}`);
   st.append(el('span', 'icon', icon), el('span', '', `${a.name}: ${word}`), el('small', '', a.text));
-  sec.append(st);
-  if (a.messages.length) {
-    const chat = el('div', 'chat');
-    for (const m of a.messages) chat.append(el('div', `msg ${m.role}`, m.text));
-    sec.append(chat);
-    queueMicrotask(() => (chat.scrollTop = chat.scrollHeight));
-  }
-  if (a.chat) {
-    const row = el('div', 'row');
-    const box = el('textarea');
-    box.rows = 1;
-    box.placeholder = a.state === 'idle' || a.state === 'done' || a.state === 'stopped' ? 'Message the agent…' : 'Message (sent when it finishes)…';
-    box.value = draft;
-    box.dataset.keep = 'draft';
-    const submit = () => {
-      const text = box.value.trim();
-      if (!text) return;
-      draft = '';
-      box.value = '';
-      send({ target: 'background', type: 'agent_say', text });
-    };
-    box.addEventListener('input', () => (draft = box.value));
-    box.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        submit();
-      }
-    });
-    const go = el('button', '', 'Send');
-    go.style.flex = 'none';
-    go.addEventListener('click', submit);
-    row.append(box, go);
-    sec.append(row);
-  }
-  return sec;
+  return st;
 }
 
 function questionBox(q: NonNullable<AgentView['question']>): HTMLElement {
@@ -185,10 +142,12 @@ export function renderHud(state: HudState): void {
   last = state;
   const r = ensureRoot();
   // Keep focus and the caret in whatever the user was typing into.
-  const focused = r.activeElement as HTMLTextAreaElement | HTMLInputElement | null;
+  const focused = r.activeElement as HTMLInputElement | null;
   const keep = focused?.dataset?.keep;
   const caret = keep ? [focused!.selectionStart, focused!.selectionEnd] : null;
   r.querySelector('.hud')?.remove();
+  // Agent mode: the sidebar shows everything, approvals included.
+  if (state.mode === 'agent' && state.sidebar) return;
 
   const a = state.agent;
   const agentBusy = !!a && (a.state === 'thinking' || a.state === 'acting' || a.state === 'waiting_user' || !!a.question);
@@ -213,8 +172,8 @@ export function renderHud(state: HudState): void {
   box.append(header);
 
   const body = el('div', 'body');
-  if (a) body.append(agentSection(a));
-  if (a) body.append(el('div', 'label', 'Tools'));
+  if (state.mode === 'agent') body.append(el('div', 'hint', 'Agent mode: open the Practicum sidebar (toolbar button → Agent) to chat with the agent.'));
+  if (a) body.append(agentLine(a));
   const list = el('ol');
   for (const e of state.entries) {
     const li = el('li', e.level satisfies LogLevel);
@@ -249,7 +208,7 @@ export function renderHud(state: HudState): void {
   r.append(box);
   list.scrollTop = list.scrollHeight;
   if (keep) {
-    const again = r.querySelector<HTMLTextAreaElement | HTMLInputElement>(`[data-keep="${keep}"]`);
+    const again = r.querySelector<HTMLInputElement>(`[data-keep="${keep}"]`);
     if (again) {
       again.focus();
       if (caret) again.setSelectionRange(caret[0], caret[1]);
