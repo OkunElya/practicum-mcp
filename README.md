@@ -15,41 +15,84 @@ The extension dials out to the bridge because browser extensions can't listen on
 ports. Both ports bind to 127.0.0.1 only. The bridge accepts only an extension
 origin presenting its pairing token.
 
-## Setup
+> **Read the [Terms of use](TERMS_OF_USE.md) first.** This is an unofficial tool, not made or
+> endorsed by Yandex. Yandex Practicum's own terms prohibit using software to obtain or use its
+> materials (clauses 4.1 and 7.2), and the platform can detect such activity. You use this on
+> your own account and at your own risk.
 
-Requirements: Firefox or Waterfox ≥ 128, Node.js, [uv](https://docs.astral.sh/uv/).
+## Install
 
-1. **Bridge**
-   ```sh
-   cd bridge
-   uv run practicum-bridge          # MCP at http://127.0.0.1:8766/mcp
-   ```
-   On first start it creates a pairing token in `~/.config/practicum-mcp/token` and
-   prints it.
+You need two parts: the **extension** in Firefox or Waterfox (≥ 128) and the **bridge**, a small
+local program it talks to. For agent mode (chatting in the sidebar) you also need
+[Ollama](https://ollama.com) with a model, or you can let Практикум ИИ drive.
 
-2. **Extension**
-   ```sh
-   npm install
-   npm run build                    # → extension/dist/
-   ```
-   In the browser open `about:debugging#/runtime/this-firefox` → *Load Temporary
-   Add-on…* → pick `extension/dist/manifest.json`. A temporary add-on stays until the
-   browser restarts. A permanent install needs a signed build, or a browser that
-   allows unsigned add-ons.
+### From a release (no build tools needed)
 
-3. **Pair**: click the toolbar button *Practicum MCP*, paste the token, *Save &
-   connect*. The badge turns green ("on") and an overlay appears in Practicum tabs.
+Download from the [Releases page](https://github.com/OkunElya/practicum-mcp/releases):
+- `practicum-mcp-<version>.xpi`: the extension;
+- `practicum_bridge-<version>-py3-none-any.whl` or `practicum-mcp-bridge-<version>.zip`: the bridge;
+- `SHA256SUMS`: check the downloads with `sha256sum -c SHA256SUMS --ignore-missing`.
 
-4. **Pick a mode** in the same popup (see [Modes](#modes)). For MCP mode, connect a client, e.g. Claude Code:
-   ```sh
-   claude mcp add --transport http practicum http://127.0.0.1:8766/mcp
-   ```
-   Clients that only launch stdio servers can run `uv run --directory bridge
-   practicum-bridge --stdio` instead. Only one bridge can own the extension port at
-   a time.
+**Extension.** The `.xpi` is not signed by Mozilla, so:
+- **Waterfox, Firefox Developer Edition or Nightly:** set `xpinstall.signatures.required` to
+  `false` in `about:config`, then `about:addons` → ⚙ → *Install Add-on From File…* → the `.xpi`.
+  It stays installed.
+- **Release Firefox:** it can't install unsigned add-ons permanently. Load it for this session:
+  `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on…* → the `.xpi`. It is removed
+  when the browser closes.
 
-For a quick manual test without a client: `cd bridge && uv run practicum-call` lists
-the tools, `uv run practicum-call where_am_i` calls one.
+**Bridge** (Python 3.13; [uv](https://docs.astral.sh/uv/) fetches it if needed). Pick one:
+- **As a command** (recommended):
+  ```sh
+  uv tool install ./practicum_bridge-<version>-py3-none-any.whl
+  practicum-bridge                       # MCP at http://127.0.0.1:8766/mcp
+  ```
+  This also installs `practicum-chat`, `practicum-call`, `practicum-local-agent` and
+  `practicum-platform-agent`. Update with `uv tool install --force <newer wheel>`; remove with
+  `uv tool uninstall practicum-bridge`. `pipx install <wheel>` works the same way.
+- **From the source zip**, with the exact dependency versions the release was tested with:
+  ```sh
+  unzip practicum-mcp-bridge-<version>.zip
+  uv run --directory practicum-mcp-bridge-<version>/bridge practicum-bridge
+  ```
+
+### From source
+
+Requirements: Node.js and [uv](https://docs.astral.sh/uv/).
+
+```sh
+git clone https://github.com/OkunElya/practicum-mcp.git && cd practicum-mcp
+npm ci && npm run build                # the extension → extension/dist/
+uv run --directory bridge practicum-bridge
+```
+
+Load `extension/dist/manifest.json` as a temporary add-on (`about:debugging` → *Load Temporary
+Add-on…*), or build an installable `.xpi` with `npm run package` and install it as above.
+`npm run build -- --dev` is only for development (see [Development](#development)).
+
+### Pair, pick a mode, connect
+
+1. **Start the bridge** (`practicum-bridge`). On first start it creates a pairing token in
+   `~/.config/practicum-mcp/token` and prints it.
+2. **Pair:** click the toolbar button *Practicum MCP*, paste the token, *Save & connect*. The
+   badge turns green ("on").
+3. **Pick a mode** in the same popup (see [Modes](#modes)):
+   - **Agent chat:** opens the sidebar. Start the bridge with a default model if you like:
+     `practicum-bridge --model gpt-oss-32k`. Ollama's 4k default context is too small; see
+     [`models/`](models/) for variants with a larger one.
+   - **MCP:** connect an MCP client. For Claude Code:
+     ```sh
+     claude mcp add --transport http practicum http://127.0.0.1:8766/mcp
+     ```
+     A client that launches stdio servers itself runs `practicum-bridge --stdio` instead (from a
+     checkout: `uv run --directory bridge practicum-bridge --stdio`), for example:
+     ```json
+     { "mcpServers": { "practicum": { "command": "practicum-bridge", "args": ["--stdio"] } } }
+     ```
+     Only one bridge can own the extension's port at a time.
+
+A quick test without a client: `practicum-call` lists the tools and `practicum-call where_am_i`
+calls one (from a checkout: `uv run --directory bridge practicum-call …`).
 
 ## Modes
 
@@ -210,6 +253,8 @@ committed.
 
 ## Releases
 
+This is for maintainers; to install a release, see [Install](#from-a-release-no-build-tools-needed).
+
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds a release when a version tag is
 pushed. It only proceeds if:
 - the tagged commit is on the `release` branch;
@@ -230,17 +275,8 @@ git switch release && git merge --ff-only master
 git tag -a v0.2.2 -m "v0.2.2" && git push origin release v0.2.2
 ```
 
-From a release, the bridge installs with `uv tool install ./practicum_bridge-<version>-py3-none-any.whl`
-(Python 3.13). That gives the `practicum-bridge`, `practicum-chat` and `practicum-call` commands. The
-wheel carries its own copy of `shared/tools.json`.
-
-## Installing the extension permanently
-
-`npm run package` builds `extension/practicum-mcp-<version>.xpi` (no token, no dev tools). Waterfox
-installs it from `about:addons` → *Install Add-on From File…* after setting
-`xpinstall.signatures.required = false`; release Firefox needs a signed build (or use
-`about:debugging` for a temporary load). Paste the token from `~/.config/practicum-mcp/token` into
-the toolbar popup.
+The wheel carries its own copy of `shared/tools.json`, and the `.xpi` and the source zip include
+`LICENSE`.
 
 ## Staying in control
 
@@ -288,6 +324,11 @@ How the site works, and why the tools do what they do:
 
 - Search, notes, ratings and the AI summary button have no tools.
 - Firefox/Waterfox only. What a Chrome port would take: [`docs/chrome-port.md`](docs/chrome-port.md).
+
+## Terms of use
+
+See [TERMS_OF_USE.md](TERMS_OF_USE.md): an unofficial tool, used at your own risk, and what Yandex
+Practicum's and Yandex AI's terms say about automated use.
 
 ## License
 
