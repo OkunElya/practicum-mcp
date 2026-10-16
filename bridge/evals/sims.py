@@ -331,9 +331,16 @@ class LessonSim(BaseSim):
     page = "theory lesson"
     tools_here = LESSON_TOOLS
 
-    def __init__(self, scenario: Path, workdir: Path | None = None):
+    def __init__(self, scenario: Path, workdir: Path | None = None, lenient: bool = False):
         super().__init__(scenario)
         self.lesson = json.loads((scenario / "lesson.json").read_text())
+        if lenient:
+            # Testing: a question nobody answered must not hold the lesson up. Quizzes stop being
+            # blocking (the renderer, the hidden-block check and complete_lesson all read this flag);
+            # buttons still gate what follows them, as on the page.
+            for n in self.nodes():
+                if n["type"] != "ActionButton" and isinstance(n.get("content"), dict):
+                    n["content"]["blocking"] = False
         meta = scenario / "meta.json"
         self.meta = json.loads(meta.read_text()) if meta.exists() else {}
         self.helper = Helper.get()
@@ -342,6 +349,8 @@ class LessonSim(BaseSim):
         self.code: dict[str, str] = {}  # block ref → code in its editor
         self.chats: dict[str, dict] = {}  # block ref → {"msg", "used", "pending"}
         self.done = False
+        self.asked_user = 0  # questions the solver handed to the (simulated) user
+        self.user_answered: set[str] = set()  # refs the simulated user answered (not the model's answers)
 
     # -- helpers
 
@@ -352,6 +361,13 @@ class LessonSim(BaseSim):
         """(brief block, its theory node, the parsed answer plan) for a ref like q3."""
         r = self.helper(op="plan", lesson=self.lesson, answers=self.answers, ref=ref, **({"answer": answer} if answer is not None else {}))
         return r["block"], self.node(r["block"]["nodeId"]), r.get("plan")
+
+    def nodes(self):
+        stack = [self.lesson["theory"]]
+        while stack:
+            n = stack.pop()
+            yield n
+            stack.extend(n.get("nested") or [])
 
     def node(self, node_id: str) -> dict:
         stack = [self.lesson["theory"]]
@@ -723,12 +739,14 @@ class LessonSim(BaseSim):
         user_only = set(self.meta.get("user_only") or [])
         blocks = self.blocks()
         graded = [b for b in blocks if b["nodeId"] not in user_only and b["type"] not in ("ActionButton", "QuizFeedback") and not (b["type"] == "QuizCoding" and not (self.node(b["nodeId"]).get("content") or {}).get("use_tests"))]
+        graded = [b for b in graded if b["ref"] not in self.user_answered]  # score the model's own answers
         first = sum(1 for b in graded if self.attempts.get(b["ref"], [False])[0])
         final = sum(1 for b in graded if any(self.attempts.get(b["ref"], [])))
         # Tasks that ask for the student's own result (pytest output on their machine) are left out of
         # the score: leaving them is right, and a model can sometimes work the answer out (it did).
         return {
             "solved": self.done,
+            "asked_user": self.asked_user,
             "user_only_answered": sum(1 for b in blocks if b["nodeId"] in user_only and self.attempts.get(b["ref"])),
             "blocks": len(graded),
             "first_try": first,
@@ -751,8 +769,9 @@ class JourneySim(BaseSim):
 
     kind = "journey"
 
-    def __init__(self, scenario: Path, workdir: Path):
+    def __init__(self, scenario: Path, workdir: Path, lenient: bool = False):
         super().__init__(scenario)
+        self.lenient = lenient
         spec = json.loads((scenario / "journey.json").read_text())
         self.dirs = [scenario / p for p in spec["pages"]]
         self.work = workdir
@@ -760,7 +779,7 @@ class JourneySim(BaseSim):
         self.finished = False
 
     def load(self, i: int):
-        sim = load_sim(self.dirs[i], self.work / f"page{i + 1}")
+        sim = load_sim(self.dirs[i], self.work / f"page{i + 1}", self.lenient)
         if isinstance(sim, LessonSim) and i + 1 < len(self.dirs) and not (self.dirs[i + 1] / "lesson.json").exists():
             sim.meta["practice_next"] = True  # the next page is a trainer: «Перейти к заданию»
         return sim
@@ -807,13 +826,60 @@ class JourneySim(BaseSim):
             "first_try": sum(m.get("first_try", 0) for m in per),
             "skipped": sum(m.get("skipped", 0) for m in per),
             "wrong": sum(m.get("wrong", 0) for m in per),
+            "asked_user": sum(m.get("asked_user", 0) for m in per),
         }
 
 
-def load_sim(scenario: Path, workdir: Path):
-    """The simulator for a scenario directory."""
+L = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def key_answer(b: dict, c: dict) -> str | None:
+    """The right answer in read_lesson's numbering, from the lesson's own keys."""
+    t = b["type"]
+    if t == "QuizSelect":
+        right = [str(i + 1) for i, o in enumerate(c["options"]) if o.get("correct")] or ["1"]  # no key: a poll
+        return right[0] if c.get("type") == "radio" else ", ".join(right)
+    if t == "QuizChoice":
+        ids = [o["id"] for o in c["options"]]
+        return "; ".join(f"{i + 1}={L[ids.index(q['correct_option'])]}" for i, q in enumerate(c["questions"]))
+    if t == "QuizCards":
+        ids = [s["id"] for s in c["sections"]]
+        return "; ".join(f"{i + 1}={L[ids.index(o['correct_section'])]}" for i, o in enumerate(c["options"]))
+    if t == "QuizMacaroni":
+        return "; ".join(f"{l + 1}={L[r]}" for l, r in sorted(c["correct_answers"][0]))
+    if t == "QuizText":
+        strict = [v["match"] for v in c.get("validations") or [] if v.get("type") == "strict"]
+        return strict[0] if strict else None
+    return None
+
+
+
+def oracle_user(sim):
+    """A simulated user for the lesson solver's fallback: answers from the lesson's key, and counts."""
+
+    async def ask(ref: str, block: str, candidates: list[str]) -> str | None:
+        page = sim.cur if isinstance(sim, JourneySim) else sim
+        if not isinstance(page, LessonSim):
+            return None
+        b = next((x for x in page.blocks() if x["ref"] == ref), None)
+        if b is None:
+            return None
+        page.asked_user += 1
+        page.user_answered.add(ref)
+        n = page.node(b["nodeId"])
+        c = n.get("content") or {}
+        if b["type"] == "QuizChat":
+            st = page.chat(b, n)
+            return next((str(i + 1) for i, o in enumerate(page.chat_options(c, st)) if o.get("isValid")), None)
+        return key_answer(b, c)
+
+    return ask
+
+
+def load_sim(scenario: Path, workdir: Path, lenient: bool = False):
+    """The simulator for a scenario directory. lenient: unanswered quizzes don't block (for testing)."""
     if (scenario / "journey.json").exists():
-        return JourneySim(scenario, workdir)
+        return JourneySim(scenario, workdir, lenient)
     if (scenario / "lesson.json").exists():
-        return LessonSim(scenario, workdir)
+        return LessonSim(scenario, workdir, lenient)
     return TrainerSim(scenario, workdir)

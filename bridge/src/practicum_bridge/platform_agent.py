@@ -468,10 +468,14 @@ class OllamaBackend:
             calls.append({"tool": str(fn.get("name", "")), "args": clean_args(args)})
         self.note(self.name, "\n".join(f"CALL {json.dumps(c, ensure_ascii=False)}" for c in calls) or content or "(empty)")
         answer = None if calls else (re.sub(r"^\s*ANSWER:\s*", "", content) or None)
+        if answer and re.fullmatch(r"\{.*\}", answer.strip(), re.S) and re.search(r'"(block|tool|answer|lesson|file)"\s*:', answer):
+            # Seen twice: the model ended with {"answer": "2", "block": "q1"} as text instead of calling the tool.
+            self.note("off format", "a tool call written as text")
+            answer = None
         return Turn(calls, answer, [])
 
     def off_format(self) -> None:
-        self.messages.append({"role": "user", "content": "Пустой ответ. Вызови нужный инструмент или напиши итог текстом."})
+        self.messages.append({"role": "user", "content": "Ответ не по формату: пустой или вызов инструмента, написанный текстом. Вызови нужный инструмент (через tool call) или напиши итог обычным текстом."})
 
     def results(self, done: list[Executed], bad: list[str], page_changed: bool) -> None:
         for i, e in enumerate(done):

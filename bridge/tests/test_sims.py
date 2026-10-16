@@ -17,6 +17,8 @@ EVALS = Path(__file__).resolve().parents[1] / "evals"
 RAW = EVALS / "raw" / "lessons"
 sys.path.insert(0, str(EVALS))
 
+from sims import key_answer  # noqa: E402
+
 pytestmark = pytest.mark.skipif(not RAW.exists() or not shutil.which("node"), reason="no scraped lessons or no node")
 
 L = string.ascii_uppercase
@@ -38,26 +40,6 @@ def sim_for(tmp_path: Path, raw: Path):
     sc.mkdir()
     shutil.copy(raw, sc / "lesson.json")
     return LessonSim(sc)
-
-
-def key_answer(b: dict, c: dict) -> str | None:
-    """The right answer in read_lesson's numbering, from the lesson's own keys."""
-    t = b["type"]
-    if t == "QuizSelect":
-        right = [str(i + 1) for i, o in enumerate(c["options"]) if o.get("correct")] or ["1"]  # no key: a poll
-        return right[0] if c.get("type") == "radio" else ", ".join(right)
-    if t == "QuizChoice":
-        ids = [o["id"] for o in c["options"]]
-        return "; ".join(f"{i + 1}={L[ids.index(q['correct_option'])]}" for i, q in enumerate(c["questions"]))
-    if t == "QuizCards":
-        ids = [s["id"] for s in c["sections"]]
-        return "; ".join(f"{i + 1}={L[ids.index(o['correct_section'])]}" for i, o in enumerate(c["options"]))
-    if t == "QuizMacaroni":
-        return "; ".join(f"{l + 1}={L[r]}" for l, r in sorted(c["correct_answers"][0]))
-    if t == "QuizText":
-        strict = [v["match"] for v in c.get("validations") or [] if v.get("type") == "strict"]
-        return strict[0] if strict else None
-    return None
 
 
 UNGRADEABLE: set[str] = set()  # code exercises whose reference solution doesn't pass locally
@@ -222,3 +204,23 @@ def test_blocks_behind_a_button_say_which_button(tmp_path):
             assert r.is_error and f"press_action_button block={blocks[0]['ref']}" in r.content[0].text, r.content[0].text
             return
     pytest.skip("no lesson with a quiz right after a button")
+
+
+def test_lenient_mode_lets_a_lesson_finish_with_quizzes_left(tmp_path):
+    from sims import LessonSim
+
+    for raw in lessons_with("QuizSelect"):
+        sc = tmp_path / raw.stem
+        sc.mkdir()
+        shutil.copy(raw, sc / "lesson.json")
+        strict, lenient = LessonSim(sc), LessonSim(sc, lenient=True)
+        if any(b["type"] != "ActionButton" for b in strict.required_open()):
+            for b in lenient.blocks():
+                if b["type"] == "ActionButton":
+                    lenient._call("press_action_button", {"block": b["ref"]})
+            assert not lenient.required_open()
+            r = lenient._call("complete_lesson", {})
+            assert not r.is_error and lenient.done, r.content[0].text
+            assert lenient.metrics()["skipped"] > 0  # the left questions are still counted
+            return
+    pytest.skip("no lesson with a blocking quiz")

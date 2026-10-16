@@ -27,7 +27,7 @@ from pathlib import Path
 from practicum_bridge.platform_agent import OllamaBackend, Session
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sims import load_sim  # noqa: E402
+from sims import load_sim, oracle_user  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TASKS = {
@@ -39,15 +39,17 @@ TASKS = {
 ROUNDS = {"trainer": 30, "lesson": 40, "journey": 150}
 
 
-async def run_one(scenario: Path, model: str, ollama: str, temperature: float, think, rounds: int, seed: int, num_ctx, transcript: Path, prompt: tuple[str, str | None], solver: bool = True) -> dict:
+async def run_one(scenario: Path, model: str, ollama: str, temperature: float, think, rounds: int, seed: int, num_ctx, transcript: Path, prompt: tuple[str, str | None], solver: bool = True, user: str = "none", lenient: bool = True) -> dict:
     events: list[tuple[str, str]] = []
     note = lambda kind, text: events.append((kind, text))  # noqa: E731
     with tempfile.TemporaryDirectory(prefix="sim-") as tmp:
-        client = load_sim(scenario, Path(tmp))
+        client = load_sim(scenario, Path(tmp), lenient)
         label, system = prompt
         backend = OllamaBackend(note, model, ollama, num_ctx, temperature, think, **({"system": system} if system else {}))
         backend.options["seed"] = seed
         session = Session(client, backend, note, solver)
+        if user == "oracle":
+            session.ask_user = oracle_user(client)  # the solver's handoffs get the key answer; counted as asked_user
         t0 = time.monotonic()
         await session.open()
         out = await session.ask(TASKS[client.kind], rounds or ROUNDS[client.kind])
@@ -78,13 +80,13 @@ async def run_one(scenario: Path, model: str, ollama: str, temperature: float, t
 
 
 def by_scenario(rows: list[dict]) -> str:
-    out = ["scenario                          runs solved  first-try  wrong  skipped  pages  checks  rounds  tool-err  sec"]
+    out = ["scenario                          runs solved  first-try  wrong  skipped  to-user  pages  checks  rounds  tool-err  sec"]
     for sc in sorted({r["scenario"] for r in rows}):
         rs = [r for r in rows if r["scenario"] == sc]
         avg = lambda k: statistics.mean(r.get(k) or 0 for r in rs)  # noqa: E731
         ft = f"{sum(r.get('first_try', 0) for r in rs)}/{sum(r.get('blocks', 0) for r in rs)}" if any(r.get("blocks") for r in rs) else "-"
         pages = f"{sum(r.get('pages_done', 0) for r in rs)}/{sum(r.get('pages', 0) for r in rs)}" if any(r.get("pages") for r in rs) else "-"
-        out.append(f"{sc[:33]:<33} {len(rs):<4} {sum(bool(r['solved']) for r in rs)}/{len(rs):<5} {ft:<10} {sum(r.get('wrong', 0) for r in rs):<6} {sum(r.get('skipped', 0) for r in rs):<8} {pages:<6} {avg('checks'):<7.1f} {avg('rounds'):<7.0f} {avg('tool_errors'):<9.1f} {avg('seconds'):.0f}")
+        out.append(f"{sc[:33]:<33} {len(rs):<4} {sum(bool(r['solved']) for r in rs)}/{len(rs):<5} {ft:<10} {sum(r.get('wrong', 0) for r in rs):<6} {sum(r.get('skipped', 0) for r in rs):<8} {sum(r.get('asked_user', 0) for r in rs):<8} {pages:<6} {avg('checks'):<7.1f} {avg('rounds'):<7.0f} {avg('tool_errors'):<9.1f} {avg('seconds'):.0f}")
     return "\n".join(out)
 
 
@@ -112,7 +114,7 @@ async def amain(a) -> None:
     for n, (sc, t, i, pr) in enumerate(plan, 1):
         transcript = path.with_suffix("") / f"{n:03d}-{Path(sc).name}-{pr[0]}-T{t}.log"
         transcript.parent.mkdir(exist_ok=True)
-        row = await run_one(Path(sc), a.model, a.ollama, t, a.think, a.rounds, a.seed + i, a.num_ctx, transcript, pr, not a.no_solver)
+        row = await run_one(Path(sc), a.model, a.ollama, t, a.think, a.rounds, a.seed + i, a.num_ctx, transcript, pr, not a.no_solver, a.user, not a.strict)
         rows.append(row)
         with path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -135,6 +137,8 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=random.randrange(10_000))
     p.add_argument("--summary", type=Path, help="only print the summary of a results file")
     p.add_argument("--no-solver", action="store_true", help="run without solve_current_lesson")
+    p.add_argument("--strict", action="store_true", help="unanswered blocking quizzes block the lesson, as on the site (default: they don't, so a left question doesn't stop a test)")
+    p.add_argument("--user", choices=["none", "oracle"], default="none", help="who answers what the solver hands to the user: nobody, or a simulated user with the key (to test journeys apart from answer quality)")
     a = p.parse_args()
     if a.summary:
         rows = [json.loads(l) for l in a.summary.read_text().splitlines() if l.strip()]
