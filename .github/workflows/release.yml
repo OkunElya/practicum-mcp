@@ -1,0 +1,216 @@
+# Release: build the Firefox extension and package the Python bridge, then publish both
+# as a GitHub release.
+#
+# Runs only when a version tag (vX.Y.Z, or vX.Y.Z-rc1 for a pre-release) is pushed, and
+# only if the tagged commit is on the `release` branch. The tag must match the versions in
+# extension/manifest.json and bridge/pyproject.toml.
+#
+#   git switch release && git merge --ff-only master
+#   git tag -a v0.2.2 -m "v0.2.2" && git push origin release v0.2.2
+#
+# Actions are pinned to commit SHAs (the tag is noted alongside); every job gets only the
+# permissions it needs, and only the publish job can write.
+
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: Check the tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # all branches, to see whether the tag is on `release`
+          persist-credentials: false
+
+      - name: Tagged commit is on the release branch
+        run: |
+          if ! git rev-parse --verify --quiet refs/remotes/origin/release >/dev/null; then
+            echo "::error::there is no 'release' branch; releases are cut from it"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/release; then
+            echo "::error::tag ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not on the release branch"
+            exit 1
+          fi
+
+      - name: Tag matches the versions in the code
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          manifest=$(jq -r .version extension/manifest.json)
+          bridge=$(sed -n 's/^version = "\(.*\)"$/\1/p' bridge/pyproject.toml | head -n1)
+          ok=true
+          # Firefox versions can't carry "-rc1": the manifest has the plain X.Y.Z of a pre-release tag.
+          [[ "$manifest" == "${version%%-*}" ]] || { echo "::error file=extension/manifest.json::version $manifest, tag $TAG"; ok=false; }
+          [[ "$bridge" == "$version" || "$bridge" == "${version%%-*}" ]] || { echo "::error file=bridge/pyproject.toml::version $bridge, tag $TAG"; ok=false; }
+          $ok
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  extension:
+    name: Firefox extension
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # A release build: no dev tools, no bridge token (build.mjs refuses --package with --dev).
+      - name: Package
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          npm run package
+          manifest=$(jq -r .version extension/manifest.json)
+          mkdir -p out
+          mv "extension/practicum-mcp-${manifest}.xpi" "out/practicum-mcp-${VERSION}.xpi"
+          if unzip -p "out/practicum-mcp-${VERSION}.xpi" background.js | grep -q "dev_confirm"; then
+            echo "::error::the package contains dev tools"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: extension
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
+  bridge:
+    name: Python bridge
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          working-directory: bridge # Python from bridge/.python-version
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - run: uv sync --locked
+      - run: uv run --locked pytest -q
+
+      # The wheel carries its own copy of the tool specs (config.py finds it next to itself).
+      - name: Build wheel and sdist
+        run: |
+          cp ../shared/tools.json src/practicum_bridge/tools.json
+          uv build --out-dir ../out
+
+      - name: Installed wheel starts and finds its tools
+        working-directory: ${{ runner.temp }}
+        env:
+          OUT: ${{ github.workspace }}/out
+        run: |
+          python=$(cat "$GITHUB_WORKSPACE/bridge/.python-version")
+          uv run --isolated --no-project --python "$python" --with "$OUT"/*.whl practicum-bridge --help >/dev/null
+          uv run --isolated --no-project --python "$python" --with "$OUT"/*.whl python -c \
+            "from practicum_bridge.config import load_tool_specs; n = len(load_tool_specs()); assert n > 0; print(n, 'tools')"
+
+      # The bridge as source, for running from a folder with the locked dependencies:
+      # unzip, then `uv run --directory bridge practicum-bridge`.
+      - name: Source bundle
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        working-directory: .
+        run: |
+          git archive --format=zip --prefix="practicum-mcp-bridge-${VERSION}/" -o "out/practicum-mcp-bridge-${VERSION}.zip" HEAD \
+            README.md shared/tools.json \
+            bridge/README.md bridge/pyproject.toml bridge/uv.lock bridge/.python-version bridge/src
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bridge
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: GitHub release
+    needs: [verify, extension, bridge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and upload its files
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * | tee SHA256SUMS
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          ## Downloads
+
+          - **practicum-mcp-${VERSION}.xpi**: the Firefox/Waterfox extension. It is not signed: Waterfox
+            installs it from about:addons → ⚙ → *Install Add-on From File…* after setting
+            \`xpinstall.signatures.required = false\`; release Firefox can load it from about:debugging.
+          - **practicum_bridge-${VERSION}-py3-none-any.whl**: the bridge, e.g.
+            \`uv tool install ./practicum_bridge-${VERSION}-py3-none-any.whl\`, then \`practicum-bridge\`
+            (also \`practicum-chat\`, \`practicum-call\`, …). Needs Python 3.13.
+          - **practicum-mcp-bridge-${VERSION}.zip**: the bridge as source with locked dependencies:
+            unzip, then \`uv run --directory practicum-mcp-bridge-${VERSION}/bridge practicum-bridge\`.
+          - **SHA256SUMS**: \`sha256sum -c SHA256SUMS\`.
+
+          Setup and pairing: see the README.
+          EOF
+          prerelease=()
+          [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber # a re-run: replace the files
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "$TAG" --notes-file notes.md --generate-notes "${prerelease[@]}"
+          fi

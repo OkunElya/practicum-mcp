@@ -204,6 +204,32 @@ lesson with its key answers and walks every scenario with known solutions. It's 
 the scraped data. The scraped lessons, scenarios and solutions are course material and are not
 committed.
 
+## Releases
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds a release when a version tag is
+pushed. It only proceeds if:
+- the tagged commit is on the `release` branch;
+- the tag matches the version in both `extension/manifest.json` and `bridge/pyproject.toml`.
+
+The workflow runs the extension's and the bridge's tests, then builds:
+- the extension `.xpi`;
+- the bridge wheel and sdist;
+- a source zip of the bridge with its locked dependencies;
+- `SHA256SUMS`.
+
+It publishes all of them as a GitHub release. A tag like `v1.2.0-rc1` makes a pre-release; for
+it the manifest keeps the plain `1.2.0`, because Firefox versions can't carry a suffix.
+
+```sh
+# bump "version" in extension/manifest.json and bridge/pyproject.toml, then `uv lock` in bridge/
+git switch release && git merge --ff-only master
+git tag -a v0.2.2 -m "v0.2.2" && git push origin release v0.2.2
+```
+
+From a release, the bridge installs with `uv tool install ./practicum_bridge-<version>-py3-none-any.whl`
+(Python 3.13). That gives the `practicum-bridge`, `practicum-chat` and `practicum-call` commands. The
+wheel carries its own copy of `shared/tools.json`.
+
 ## Installing the extension permanently
 
 `npm run package` builds `extension/practicum-mcp-<version>.xpi` (no token, no dev tools). Waterfox

@@ -1,6 +1,7 @@
 """MCP server whose tools are executed by the browser extension."""
 
 import logging
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 import mcp_types as types
@@ -58,6 +59,13 @@ def text_result(text: str, is_error: bool = False) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=is_error)
 
 
+def _version() -> str:
+    try:
+        return version("practicum-bridge")
+    except PackageNotFoundError:
+        return "0.0.0"
+
+
 def build_server(link: ExtensionLink, static_specs: list[dict[str, Any]]) -> Server:
     def specs() -> list[dict[str, Any]]:
         # The connected extension's own list wins: it knows what it implements.
@@ -91,7 +99,7 @@ def build_server(link: ExtensionLink, static_specs: list[dict[str, Any]]) -> Ser
 
     return Server(
         "practicum-mcp",
-        version="0.1.0",
+        version=_version(),
         instructions=INSTRUCTIONS,
         on_list_tools=list_tools,
         on_call_tool=call_tool,

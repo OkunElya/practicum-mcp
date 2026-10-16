@@ -7,8 +7,17 @@ from pathlib import Path
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "practicum-mcp"
 DEFAULT_TOKEN_FILE = CONFIG_DIR / "token"
-# bridge/src/practicum_bridge/config.py -> repo root
-DEFAULT_TOOLS_FILE = Path(__file__).resolve().parents[3] / "shared" / "tools.json"
+
+
+def _tools_file() -> Path:
+    """shared/tools.json in a checkout (bridge/src/practicum_bridge/config.py -> repo root);
+    an installed wheel carries its own copy next to this file (the release workflow puts it there)."""
+    here = Path(__file__).resolve()
+    repo = here.parents[3] / "shared" / "tools.json" if len(here.parents) > 3 else None
+    return repo if repo and repo.exists() else here.parent / "tools.json"
+
+
+DEFAULT_TOOLS_FILE = _tools_file()
 
 
 def load_or_create_token(path: Path = DEFAULT_TOKEN_FILE) -> str:

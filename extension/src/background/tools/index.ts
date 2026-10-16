@@ -2,7 +2,7 @@ import { TOOL_SPECS } from '../../shared/specs';
 import type { Tool } from '../router';
 import { askPlatformAi, resetPlatformAiChat } from './ai';
 import { checkCodeExercise, resetCodeExercise, runCodeExercise } from './coding';
-import { DEV_TOOLS } from './dev';
+import { devTools } from './dev';
 import { completeLesson, goHome, openLesson } from './nav';
 import { getCode, getProgress, readLesson, readTask } from './read';
 import { answerQuiz, pressActionButton } from './theory';
@@ -41,7 +41,7 @@ export const TOOLS: Tool[] = [
   // platform AI
   askPlatformAi,
   resetPlatformAiChat,
-  ...(__DEV__ ? DEV_TOOLS : []),
+  ...(__DEV__ ? devTools() : []),
 ];
 
 const missing = TOOL_SPECS.map((s) => s.name).filter((n) => !TOOLS.some((t) => t.spec.name === n));
