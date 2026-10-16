@@ -5,11 +5,14 @@ sends it tool calls. Protocol (JSON text frames):
 
     ext -> bridge  {"type": "hello", "token", "version", "tools": [...]}
     bridge -> ext  {"type": "welcome"}            (or close 4401 on a bad token)
-    bridge -> ext  {"type": "call", "id", "tool", "args"}
+    bridge -> ext  {"type": "call", "id", "tool", "args", "source"}   source: "mcp" (a client) or "agent" (host.py)
     bridge -> ext  {"type": "cancel", "id"}       (MCP request cancelled or timed out)
     ext -> bridge  {"type": "progress", "id", "text"}
     ext -> bridge  {"type": "result", "id", "ok": true, "output"}
                    {"type": "result", "id", "ok": false, "error", "kind"}
+    ext -> bridge  {"type": "mode", "mode": "mcp" | "agent", "agent": {"backend", "model", "think"}}
+                   after welcome and on every change; in agent mode the bridge runs the agent
+                   itself (host.py) and the extension's sidebar is its chat
 
 An agent driver (practicum-chat, practicum-local-agent) may connect at /agent, so
 the on-page overlay can show what it does and pass the user's messages back:
@@ -20,7 +23,13 @@ the on-page overlay can show what it does and pass the user's messages back:
     ext -> bridge    {"type": "agent_input", "input": {...}}   relayed: bridge -> agent {"type": "agent_input", "input"}
 
 Browsers always send an Origin header, so /agent only accepts clients without one
-(local processes), and they need the token too.
+(local processes), and they need the token too. While the bridge's own agent runs
+(agent mode), /agent is refused (close 4409): there is one agent at a time.
+
+Agent events (all relayed as {"type": "agent", "event"}): hello {name, chat}, status
+{state, text}, message {role, text}, delta {turn, part, text}, turn_end {turn},
+question {id, ref, text, candidates}, question_closed {id}, models {models, platform,
+current}, gone. Agent input: say {text}, answer {id, text}, stop, clear.
 """
 
 import asyncio
@@ -30,6 +39,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
@@ -38,6 +48,17 @@ from websockets.http11 import Request, Response
 log = logging.getLogger(__name__)
 
 ProgressFn = Callable[[str], Awaitable[None]]
+
+
+class Host(Protocol):
+    """The agent the bridge runs in agent mode (host.py)."""
+
+    @property
+    def active(self) -> bool: ...
+
+    async def set_mode(self, mode: str, config: dict) -> None: ...
+
+    def input(self, inp: dict) -> None: ...
 
 
 class ToolCallError(Exception):
@@ -68,8 +89,10 @@ class ExtensionLink:
         self.port: int | None = None
         self.listening = asyncio.Event()
         self._agent: ServerConnection | None = None
-        self._agent_hello: dict | None = None  # replayed to an extension that connects later
-        self._agent_status: dict | None = None
+        # hello, status, models: replayed to an extension that connects later
+        self._agent_replay: dict[str, dict] = {}
+        self.host: Host | None = None
+        self._events: asyncio.Queue[dict] = asyncio.Queue()  # the hosted agent's events, in order
 
     def _spawn(self, coro: Awaitable[None]) -> None:
         # Keep a reference so fire-and-forget tasks aren't garbage-collected mid-flight.
@@ -86,6 +109,7 @@ class ExtensionLink:
             self._handle, host, port, process_request=self._check_origin, max_size=16 * 2**20
         ) as server:
             self.port = server.sockets[0].getsockname()[1]
+            self._spawn(self._pump_events())
             self.listening.set()
             log.info("waiting for the extension on ws://%s:%d", host, self.port)
             await server.serve_forever()
@@ -108,6 +132,25 @@ class ExtensionLink:
             except ConnectionClosed:
                 pass
 
+    def emit_agent(self, event: dict) -> None:
+        """An event of the hosted agent (host.py); sent in order, kept for replay like a relayed one."""
+        self._remember(event)
+        self._events.put_nowait(event)
+
+    async def _pump_events(self) -> None:
+        while True:
+            event = await self._events.get()
+            await self._send_ext({"type": "agent", "event": event})
+
+    def _remember(self, event: dict) -> None:
+        kind = event.get("kind")
+        if kind == "hello":
+            self._agent_replay = {"hello": event}
+        elif kind == "gone":
+            self._agent_replay = {}
+        elif kind in ("status", "models") and self._agent_replay:
+            self._agent_replay[kind] = event
+
     async def _handle_agent(self, conn: ServerConnection) -> None:
         try:
             hello = json.loads(await asyncio.wait_for(conn.recv(), 10))
@@ -118,14 +161,17 @@ class ExtensionLink:
         if hello.get("type") != "agent_hello" or not hmac.compare_digest(token.encode(), self._token.encode()):
             await conn.close(4401, "bad token")
             return
+        if self.host is not None and self.host.active:
+            await conn.close(4409, "agent mode is on in the browser: the bridge runs the agent")
+            return
         if self._agent is not None:
             await self._agent.close(4000, "replaced by a newer agent")
         self._agent = conn
-        self._agent_hello = {"kind": "hello", "name": str(hello.get("name", "agent")), "chat": bool(hello.get("chat"))}
-        self._agent_status = None
+        hello_event = {"kind": "hello", "name": str(hello.get("name", "agent")), "chat": bool(hello.get("chat"))}
+        self._remember(hello_event)
         await conn.send(json.dumps({"type": "welcome"}))
-        await self._send_ext({"type": "agent", "event": self._agent_hello})
-        log.info("agent %s connected", self._agent_hello["name"])
+        await self._send_ext({"type": "agent", "event": hello_event})
+        log.info("agent %s connected", hello_event["name"])
         try:
             async for raw in conn:
                 try:
@@ -133,14 +179,14 @@ class ExtensionLink:
                 except ValueError:
                     continue
                 if isinstance(msg, dict) and msg.get("type") == "agent_event" and isinstance(msg.get("event"), dict):
-                    if msg["event"].get("kind") == "status":
-                        self._agent_status = msg["event"]
+                    self._remember(msg["event"])
                     await self._send_ext({"type": "agent", "event": msg["event"]})
         except ConnectionClosed:
             pass
         finally:
             if self._agent is conn:
-                self._agent = self._agent_hello = self._agent_status = None
+                self._agent = None
+                self._agent_replay = {}
                 await self._send_ext({"type": "agent", "event": {"kind": "gone"}})
                 log.info("agent disconnected")
 
@@ -166,9 +212,8 @@ class ExtensionLink:
         self.version = hello.get("version")
         await conn.send(json.dumps({"type": "welcome"}))
         log.info("extension %s connected", self.version)
-        for event in (self._agent_hello, self._agent_status):  # an agent that was already running
-            if event:
-                await conn.send(json.dumps({"type": "agent", "event": event}))
+        for event in list(self._agent_replay.values()):  # an agent that was already running
+            await conn.send(json.dumps({"type": "agent", "event": event}))
 
         try:
             async for raw in conn:
@@ -192,8 +237,15 @@ class ExtensionLink:
         except (ValueError, AttributeError):
             log.warning("ignoring malformed message from the extension")
             return
+        if msg.get("type") == "mode":
+            if self.host is not None and isinstance(msg.get("agent"), dict | None):
+                # Spawned: starting the agent calls tools, whose results come through this loop.
+                self._spawn(self.host.set_mode(str(msg.get("mode")), msg.get("agent") or {}))
+            return
         if msg.get("type") == "agent_input":
-            if self._agent is not None and isinstance(msg.get("input"), dict):
+            if self.host is not None and self.host.active and isinstance(msg.get("input"), dict):
+                self.host.input(msg["input"])
+            elif self._agent is not None and isinstance(msg.get("input"), dict):
                 try:
                     await self._agent.send(json.dumps({"type": "agent_input", "input": msg["input"]}))
                 except ConnectionClosed:
@@ -217,7 +269,7 @@ class ExtensionLink:
                 )
 
     async def call(
-        self, tool: str, args: dict, timeout: float, on_progress: ProgressFn | None = None
+        self, tool: str, args: dict, timeout: float, on_progress: ProgressFn | None = None, source: str = "mcp"
     ) -> str:
         conn = self._conn
         if conn is None:
@@ -230,7 +282,7 @@ class ExtensionLink:
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._pending[call_id] = _Pending(conn, future, on_progress)
         try:
-            await conn.send(json.dumps({"type": "call", "id": call_id, "tool": tool, "args": args}))
+            await conn.send(json.dumps({"type": "call", "id": call_id, "tool": tool, "args": args, "source": source}))
             return await asyncio.wait_for(future, timeout)
         except TimeoutError:
             self._cancel(conn, call_id)

@@ -183,6 +183,50 @@ def text_of(result) -> str:
     return "\n".join(getattr(x, "text", "") for x in result.content)
 
 
+class ThinkSplitter:
+    """Separates <think>…</think> in a reply's text, for models that reason inline
+    instead of in Ollama's thinking field. Fed chunk by chunk; a tag split across
+    chunks is held back until it is complete."""
+
+    OPEN, CLOSE = "<think>", "</think>"
+
+    def __init__(self):
+        self.inside = False
+        self.buf = ""
+
+    def feed(self, chunk: str) -> list[tuple[str, str]]:
+        """("thinking" | "text", piece) for what can be decided so far."""
+        self.buf += chunk
+        out: list[tuple[str, str]] = []
+        while self.buf:
+            part = "thinking" if self.inside else "text"
+            tag = self.CLOSE if self.inside else self.OPEN
+            i = self.buf.find(tag)
+            if i >= 0:
+                if i:
+                    out.append((part, self.buf[:i]))
+                self.buf = self.buf[i + len(tag) :]
+                self.inside = not self.inside
+                continue
+            keep = next((k for k in range(min(len(tag) - 1, len(self.buf)), 0, -1) if tag.startswith(self.buf[-k:])), 0)
+            if len(self.buf) > keep:
+                out.append((part, self.buf[: len(self.buf) - keep]))
+            self.buf = self.buf[len(self.buf) - keep :]
+            break
+        return out
+
+    def flush(self) -> list[tuple[str, str]]:
+        rest, self.buf = self.buf, ""
+        return [("thinking" if self.inside else "text", rest)] if rest else []
+
+
+def split_think(text: str) -> tuple[str, str]:
+    """(thinking, the rest) of a whole reply."""
+    sp = ThinkSplitter()
+    parts = sp.feed(text) + sp.flush()
+    return "".join(t for p, t in parts if p == "thinking"), "".join(t for p, t in parts if p == "text")
+
+
 Note = Callable[[str, str], None]
 Stream = Callable[[str, str], None]  # (kind, chunk) for tokens as they arrive; not logged
 INTERRUPTED = "прервано пользователем"
@@ -403,8 +447,20 @@ class OllamaBackend:
             payload["think"] = False if self.think == "off" else self.think
         with self._request("/api/chat", payload, 900) as r:
             if self.stream is None:
-                return json.loads(r.read())
+                data = json.loads(r.read())
+                msg = data.get("message") or {}
+                if "<think>" in (msg.get("content") or ""):
+                    inline, rest = split_think(msg["content"])
+                    data["message"] = {**msg, "content": rest, "thinking": (msg.get("thinking") or "") + inline}
+                return data
             content, thinking, calls, last = [], [], [], {}
+            splitter = ThinkSplitter()
+
+            def text(piece: str) -> None:
+                for part, t in splitter.feed(piece) if piece else splitter.flush():
+                    (thinking if part == "thinking" else content).append(t)
+                    self.stream(f"{self.name} thinking" if part == "thinking" else self.name, t)
+
             for line in r:
                 if self._abort.is_set():
                     break
@@ -418,12 +474,12 @@ class OllamaBackend:
                     thinking.append(t)
                     self.stream(f"{self.name} thinking", t)
                 if c := m.get("content"):
-                    content.append(c)
-                    self.stream(self.name, c)
+                    text(c)
                 calls += m.get("tool_calls") or []
                 if chunk.get("done"):
                     last = chunk
                     break
+            text("")  # whatever the splitter held back
             return {**last, "message": {"role": "assistant", "content": "".join(content), "thinking": "".join(thinking), "tool_calls": calls}}
 
     async def structured(self, messages: list[dict], schema: dict, temperature: float, seed: int) -> dict | None:

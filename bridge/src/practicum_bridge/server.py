@@ -54,7 +54,7 @@ def to_mcp_tool(spec: dict[str, Any]) -> types.Tool:
     )
 
 
-def _text(text: str, is_error: bool = False) -> types.CallToolResult:
+def text_result(text: str, is_error: bool = False) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=is_error)
 
 
@@ -70,7 +70,7 @@ def build_server(link: ExtensionLink, static_specs: list[dict[str, Any]]) -> Ser
         spec = next((s for s in specs() if s["name"] == params.name), None)
         if spec is None:
             names = ", ".join(s["name"] for s in specs())
-            return _text(f"unknown tool {params.name!r}. Available: {names}", is_error=True)
+            return text_result(f"unknown tool {params.name!r}. Available: {names}", is_error=True)
 
         step = 0
 
@@ -86,8 +86,8 @@ def build_server(link: ExtensionLink, static_specs: list[dict[str, Any]]) -> Ser
         try:
             output = await link.call(params.name, dict(params.arguments or {}), timeout, on_progress)
         except ToolCallError as e:
-            return _text(f"[{e.kind}] {e}", is_error=True)
-        return _text(output)
+            return text_result(f"[{e.kind}] {e}", is_error=True)
+        return text_result(output)
 
     return Server(
         "practicum-mcp",

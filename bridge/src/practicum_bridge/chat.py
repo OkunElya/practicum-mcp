@@ -355,11 +355,14 @@ async def amain(a: argparse.Namespace) -> int:
         overlay = PageChannel(f"{backend.name} (chat)", chat=True)
         if await overlay.open():
             session.overlay = overlay
+        else:
+            print(console.paint("2", "No overlay channel (is the bridge running? in agent mode the browser has its own agent)."), flush=True)
         if not await session.open():
             return 1
         # gpt-oss makes one call per reply: a simple trainer task takes 14-19 rounds.
         chat = Chat(session, console, a.rounds or (10 if a.platform else 30))
         session.ask_user = chat.ask_user
+        overlay.on_stop = lambda: chat.running.cancel() if chat.running and not chat.running.done() else None
         await chat.loop()
         await overlay.close()
     return 0

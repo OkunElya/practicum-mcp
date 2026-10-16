@@ -1,7 +1,9 @@
-"""Run the bridge: WebSocket for the extension + MCP for clients.
+"""Run the bridge: WebSocket for the extension + MCP for clients, and the agent
+you chat with in the extension's sidebar when it is in agent mode.
 
     uv run practicum-bridge                 # MCP over streamable HTTP at http://127.0.0.1:8766/mcp
     uv run practicum-bridge --stdio         # MCP over stdio (for a client that spawns the bridge)
+    uv run practicum-bridge --model gpt-oss-32k   # the agent's default Ollama model (agent mode)
 """
 
 import argparse
@@ -11,6 +13,7 @@ import sys
 from pathlib import Path
 
 from .config import DEFAULT_TOKEN_FILE, DEFAULT_TOOLS_FILE, load_or_create_token, load_tool_specs
+from .host import DEFAULT_LOG, AgentHost
 from .link import ExtensionLink
 from .server import build_server
 
@@ -25,6 +28,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--stdio", action="store_true", help="serve MCP over stdio instead of HTTP")
     p.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE)
     p.add_argument("--tools", type=Path, default=DEFAULT_TOOLS_FILE, help="shared/tools.json")
+    g = p.add_argument_group("agent mode (the extension's sidebar chat)")
+    g.add_argument("--model", help="default Ollama model (else the sidebar's choice, else the first installed)")
+    g.add_argument("--ollama", default="http://127.0.0.1:11434", help="Ollama base URL")
+    g.add_argument("--rounds", type=int, help="round limit per message (default: 30 for local models, 10 for Практикум ИИ)")
+    g.add_argument("--agent-log", type=Path, default=DEFAULT_LOG, help="full record of the agent's runs")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -51,7 +59,9 @@ async def run(args: argparse.Namespace) -> None:
     log.info("extension pairing token (paste into the extension popup): %s", token)
 
     link = ExtensionLink(token)
-    server = build_server(link, load_tool_specs(args.tools))
+    specs = load_tool_specs(args.tools)
+    server = build_server(link, specs)
+    link.host = AgentHost(link, specs, args.ollama, args.model, args.rounds, args.agent_log)
     tasks = {
         asyncio.create_task(link.serve(args.host, args.ws_port), name="extension link"),
         asyncio.create_task(serve_mcp(server, args), name="mcp"),
