@@ -305,7 +305,8 @@ def test_finish_ends_the_run_with_its_status_and_the_driver_keeps_the_facts():
 
     check = Turn([{"tool": "check_task", "args": {}}], None, [])
     finish = Turn([{"tool": "finish", "args": {"summary": "Задача решена", "status": "done"}}], None, [])
-    c, s = make([check, finish, Turn([], "never reached", [])], replies={"check_task": "Solved ✓ (attempt 7)"})
+    # The first finish(done) gets the facts back to check against; the second one ends the run.
+    c, s = make([check, finish, finish, Turn([], "never reached", [])], replies={"check_task": "Solved ✓ (attempt 7)"})
 
     async def go():
         s.local["finish"] = (FINISH_TOOL, s.finish)
@@ -331,3 +332,19 @@ def test_stall_watchdog_nudges_then_stops():
     assert out.code == 5
     assert len(s.backend.nudges) == 1
     assert sum(1 for n, _ in c.calls if n == "read_lesson") == STALL_WARN + STALL_GRACE
+
+
+
+def test_finish_written_as_text_is_taken_as_the_call():
+    from practicum_bridge.platform_agent import OllamaBackend
+
+    b = OllamaBackend(lambda k, t: None, "m", "http://127.0.0.1:1", None, 0.2)
+    b.tools = [{"type": "function", "function": {"name": "finish", "description": "", "parameters": {}}}]
+    b.messages = [{"role": "system", "content": "s"}]
+
+    def post(extra=None, options=None):
+        return {"message": {"content": '{"status":"done","summary":"Всё сделано"}'}, "prompt_eval_count": 1, "eval_count": 1}
+
+    b._post = post
+    turn = asyncio.run(b.turn())
+    assert turn.calls == [{"tool": "finish", "args": {"status": "done", "summary": "Всё сделано"}}]

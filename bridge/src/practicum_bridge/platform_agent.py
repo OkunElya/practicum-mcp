@@ -496,6 +496,16 @@ class OllamaBackend:
             calls.append({"tool": str(fn.get("name", "")), "args": clean_args(args)})
         self.note(self.name, "\n".join(f"CALL {json.dumps(c, ensure_ascii=False)}" for c in calls) or content or "(empty)")
         answer = None if calls else (re.sub(r"^\s*ANSWER:\s*", "", content) or None)
+        if answer and re.fullmatch(r"\{.*\}", answer.strip(), re.S):
+            try:
+                obj = json.loads(answer)
+            except ValueError:
+                obj = None
+            if isinstance(obj, dict) and "summary" in obj and any(t["function"]["name"] == "finish" for t in self.tools):
+                # Seen live: the finish call written out as text. That is what the model meant.
+                self.note(self.name, "finish written as text: taken as the call")
+                self.messages[-1]["tool_calls"] = [{"function": {"name": "finish", "arguments": obj}}]
+                return Turn([{"tool": "finish", "args": clean_args(obj)}], None, [])
         if answer and re.fullmatch(r"\{.*\}", answer.strip(), re.S) and re.search(r'"(block|tool|answer|lesson|file)"\s*:', answer):
             # Seen twice: the model ended with {"answer": "2", "block": "q1"} as text instead of calling the tool.
             self.note("off format", "a tool call written as text")
@@ -544,6 +554,7 @@ class Session:
             # A tool-calling model keeps calling tools; an explicit way out ends runs cleanly.
             self.local[FINISH_TOOL["name"]] = (FINISH_TOOL, self.finish)
         self.finished: tuple[str, str] | None = None  # (status, summary) from finish
+        self.finish_checked = False  # the first finish(done) gets the driver's facts back once
         self.ledger: list[str] = []  # facts of this message's run, for the driver summary
         self.idle = 0  # rounds since the last progress
         self.stall_warned = False
@@ -606,7 +617,19 @@ class Session:
 
     async def finish(self, args: dict) -> str:
         status = str(args.get("status") or "done")
-        self.finished = (status if status in ("done", "blocked", "needs_user") else "done", str(args.get("summary") or "").strip())
+        status = status if status in ("done", "blocked", "needs_user") else "done"
+        if status == "done" and not self.finish_checked:
+            # Seen live: finish(done) "all lessons of the course" after 5 of 14. One look at the facts first.
+            self.finish_checked = True
+            page = next((l for l in self.page_text.splitlines() if l.startswith("Lesson ")), "")
+            return (
+                "Ещё не завершено. Сверь итог с фактами, прежде чем закончить.\n"
+                f"Задача пользователя: {short(self.task, 400)}\n"
+                f"Сейчас открыта страница: {page or self.where}\n"
+                f"{self.facts('журнал этого запуска')}\n"
+                "Если задача действительно выполнена целиком — вызови finish ещё раз. Если нет — продолжай."
+            )
+        self.finished = (status, str(args.get("summary") or "").strip())
         return "ok"
 
     def record(self, c: dict, out: str, err: bool) -> None:
@@ -689,6 +712,7 @@ class Session:
         self.last_read = None
         self.failed_check = None
         self.finished = None
+        self.finish_checked = False
         self.ledger = []
         self.idle, self.stall_warned = 0, False
         self.backend.user(text, changed, self.page_text)
