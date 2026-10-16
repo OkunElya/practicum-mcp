@@ -1,6 +1,6 @@
-can you # Practicum MCP
+# Practicum MCP
 
-Lets an MCP client (Claude Code, a small local LLM agent, …) study on
+Lets an MCP client (Claude Code, …) or a chat agent in the browser's sidebar study on
 [Yandex Practicum](https://practicum.yandex.ru) in **your own logged-in browser tab**:
 read lessons and progress, answer quizzes, write and check code, ask the platform's
 AI. Every action is visible on the page and can be stopped; anything that records
@@ -40,7 +40,7 @@ Requirements: Firefox or Waterfox ≥ 128, Node.js, [uv](https://docs.astral.sh/
 3. **Pair**: click the toolbar button *Practicum MCP*, paste the token, *Save &
    connect*. The badge turns green ("on") and an overlay appears in Practicum tabs.
 
-4. **Connect a client**, e.g. Claude Code:
+4. **Pick a mode** in the same popup (see [Modes](#modes)). For MCP mode, connect a client, e.g. Claude Code:
    ```sh
    claude mcp add --transport http practicum http://127.0.0.1:8766/mcp
    ```
@@ -50,6 +50,46 @@ Requirements: Firefox or Waterfox ≥ 128, Node.js, [uv](https://docs.astral.sh/
 
 For a quick manual test without a client: `cd bridge && uv run practicum-call` lists
 the tools, `uv run practicum-call where_am_i` calls one.
+
+## Modes
+
+The toolbar popup (and the sidebar's header) switches between two modes.
+
+- **MCP**: a plain MCP server. Your MCP client drives. A small overlay in the corner of the
+  Practicum tab shows the running tool, the log, **Stop** and **Approve / Deny**.
+- **Agent chat**: the bridge runs the agent itself, and you talk to it in the browser's
+  **sidebar**. Choosing *Agent chat* in the popup opens the sidebar; it also comes up from
+  *View → Sidebar → Practicum*. Everything moves there, approvals included, and the overlay
+  stays hidden while a sidebar is open.
+
+The sidebar shows the session as one timeline, like Claude Code's side panel:
+- your messages;
+- the model's thinking, as collapsible "Thought for N s" blocks, live while it streams;
+- its replies;
+- every tool call, as a collapsible row with arguments, progress steps and the result
+  (calls from an outside MCP client carry an `mcp` badge);
+- the driver's notes.
+
+At the bottom are the approval card, the agent's questions (candidate answers, a field,
+*Leave it*) and the message box:
+- **Enter** sends, **Shift+Enter** starts a new line.
+- **Stop** (or **Esc**) ends the run.
+- Messages sent during a run wait for it to finish.
+- *New chat* starts over.
+- `/continue` lets the model go on after the round limit.
+
+The header picks the model: any installed Ollama model, or Практикум ИИ. It also sets the
+reasoning effort.
+
+```sh
+uv run --directory bridge practicum-bridge --model gpt-oss-32k   # default model for agent mode
+```
+
+- Without `--model`, the bridge uses the sidebar's choice, or else the first installed model.
+- Nothing runs until your first message: that is when the agent reads the page.
+- The full record goes to `~/.config/practicum-mcp/agent.log` (`--agent-log`).
+- Models that reason inside `<think>…</think>` tags get that text shown as thinking too.
+- MCP clients keep working in agent mode; their calls queue with the agent's.
 
 ## Tools
 
@@ -104,10 +144,12 @@ The first message also carries the current page. Compared with the shared prompt
 task, it needed fewer checks per run (1.5 vs 1.8) and solved 22/24 runs vs 21/24. gpt-oss makes
 one tool call per reply, so local runs default to 30 rounds.
 
-## Chatting with the agent
+## Chatting with the agent in a terminal
 
+The sidebar (agent mode) is the main way to chat. In MCP mode,
 `uv run --directory bridge practicum-chat --model gpt-oss-32k [--think low]` (or `--platform` for
-Практикум ИИ) opens an interactive chat over the same loop. Each message runs the agent until the
+Практикум ИИ) opens the same chat in a terminal; the sidebar shows it, too, and takes its messages.
+In agent mode the bridge refuses it, because only one agent runs at a time. Each message runs the agent until the
 model answers in text, and the conversation carries over to the next message. Tool calls show as
 short `▸ tool(args)` lines with clipped results, and local models stream their replies. The full
 record goes to `chat.log`.
@@ -171,9 +213,10 @@ the toolbar popup.
 
 ## Staying in control
 
-- **Overlay** (bottom right of every Practicum tab): the running tool, the step log,
-  **Stop**, and **Approve / Deny** for actions that change your account. Each element
-  is highlighted before it is clicked or typed into.
+- **Overlay** (bottom right of every Practicum tab, MCP mode): the running tool, the step
+  log, **Stop**, and **Approve / Deny** for actions that change your account. In agent mode the
+  **sidebar** shows all of this. Either way, each element is highlighted before it is clicked
+  or typed into.
 - **Toolbar popup**: connection state, recent log, *Stop all actions*, and the
   "Ask me before irreversible actions" switch (on by default).
 - Tools run one at a time. Stop cancels the running one and everything queued. If
@@ -197,10 +240,11 @@ Layout:
 
 ```
 shared/tools.json          tool specs (extension + bridge)
-bridge/                    Python: WebSocket link + MCP server (uv project)
+bridge/                    Python: WebSocket link + MCP server + the agent (host.py) (uv project)
 extension/src/background/  link, queue/router, approvals, activity log, tool macros (tools/)
 extension/src/content/     page access (Redux store, Monaco via wrappedJSObject), input, overlay, ops/
-extension/src/shared/      protocol, lesson renderer, answer parser
+extension/src/sidebar/     the agent chat: timeline, approvals, message box
+extension/src/shared/      protocol, transcript (the timeline), lesson renderer, answer parser
 scripts/inspect/           probes used to map the site (BiDi + puppeteer-core)
 docs/                      platform findings, action catalogue, scaffold plan
 ```
