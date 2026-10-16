@@ -25,12 +25,14 @@ rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 cpSync(join(root, 'manifest.json'), join(out, 'manifest.json'));
 cpSync(join(root, 'src/popup/popup.html'), join(out, 'popup.html'));
+cpSync(join(root, 'src/sidebar/sidebar.html'), join(out, 'sidebar.html'));
 
 const ctx = await esbuild.context({
   entryPoints: {
     background: join(root, 'src/background/main.ts'),
     content: join(root, 'src/content/main.ts'),
     popup: join(root, 'src/popup/popup.ts'),
+    sidebar: join(root, 'src/sidebar/sidebar.ts'),
   },
   outdir: out,
   bundle: true,
