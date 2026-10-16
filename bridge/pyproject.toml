@@ -3,6 +3,7 @@ name = "practicum-bridge"
 version = "0.2.4"
 description = "MCP server bridging to the Practicum browser extension"
 readme = "README.md"
+license = "GPL-3.0-or-later"
 authors = [
     { name = "OkunElya", email = "okun.elya@gmail.com" }
 ]

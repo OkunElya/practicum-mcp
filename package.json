@@ -10,7 +10,8 @@
     "package": "node extension/build.mjs --package"
   },
   "author": "",
-  "license": "ISC",
+  "license": "GPL-3.0-or-later",
+  "private": true,
   "type": "module",
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.1",

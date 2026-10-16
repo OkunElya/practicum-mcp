@@ -284,3 +284,8 @@ How the site works, and why the tools do what they do:
 
 - Search, notes, ratings and the AI summary button have no tools.
 - Firefox/Waterfox only. What a Chrome port would take: [`docs/chrome-port.md`](docs/chrome-port.md).
+
+## License
+
+[GPL-3.0-or-later](LICENSE): you may use, change and share this under the GNU General Public
+License, version 3 or (at your option) any later version.
