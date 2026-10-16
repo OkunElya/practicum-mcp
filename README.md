@@ -247,7 +247,7 @@ extension/src/content/     page access (Redux store, Monaco via wrappedJSObject)
 extension/src/sidebar/     the agent chat: timeline, approvals, message box
 extension/src/shared/      protocol, transcript (the timeline), lesson renderer, answer parser
 scripts/inspect/           probes used to map the site (BiDi + puppeteer-core)
-docs/                      platform findings, action catalogue, scaffold plan
+docs/                      platform findings, action catalogue, scaffold plan, Chrome port notes
 ```
 
 How the site works, and why the tools do what they do:
@@ -257,3 +257,4 @@ How the site works, and why the tools do what they do:
 ### Known gaps
 
 - Search, notes, ratings and the AI summary button have no tools.
+- Firefox/Waterfox only. What a Chrome port would take: [`docs/chrome-port.md`](docs/chrome-port.md).
