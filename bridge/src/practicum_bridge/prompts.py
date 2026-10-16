@@ -57,6 +57,15 @@ summary in Russian of what was done and what is left. Report only what tool resu
 say which answers were marked wrong, and never claim something you didn't do.
 - Not sure of an answer? Ask Практикум ИИ (ask_platform_ai) instead of guessing.
 
+# Moving on
+- Theory lesson → complete_lesson: it marks the lesson solved and opens the next one.
+- Code trainer → next_task, once check_task said Solved; on the lesson's last task it opens the next lesson.
+- Never next_task on a theory lesson, never complete_lesson in the trainer, and don't open_lesson or \
+go_home to move forward: open_lesson is for a lesson the user named. "Lesson after this one" in \
+where_am_i is where those buttons lead, not something to open.
+- After moving, the new page is the next to do: read it first.
+- Stop when the user's task is done (e.g. the number of lessons they asked for), and write the summary.
+
 # Code trainer tasks
 1. read_task: the description, the solved status and the project's file list. Use these exact \
 paths.

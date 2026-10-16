@@ -109,7 +109,7 @@ def theory_scenarios(per_type: int) -> list[str]:
             page = f"pages/{k + 1:02d}-{l['pos']}"
             write_lesson(OUT / name / page, json.loads((RAW / "lessons" / f"{l['id']}.json").read_text()), index, "journey")
             pages.append(page)
-        (OUT / name / "journey.json").write_text(json.dumps({"pages": pages}, indent=1))
+        (OUT / name / "journey.json").write_text(json.dumps({"pages": pages, "lessons": len(trio)}, indent=1))
         names.append(name)
     return names
 
@@ -239,7 +239,8 @@ def routes_journey() -> list[str]:
         page = f"pages/{len(pages) + 1:02d}-{t}"
         shutil.copytree(OUT / t, d / page)
         pages.append(page)
-    (d / "journey.json").write_text(json.dumps({"pages": pages}, indent=1))
+    # Lessons, not pages: lesson 3's three tasks are one lesson (4 = 2 theory + lessons 3 and 4).
+    (d / "journey.json").write_text(json.dumps({"pages": pages, "lessons": 4}, indent=1))
     return ["journey-routes"]
 
 

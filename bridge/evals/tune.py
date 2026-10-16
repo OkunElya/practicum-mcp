@@ -33,7 +33,8 @@ HERE = Path(__file__).resolve().parent
 TASKS = {
     "trainer": "Реши текущую задачу тренажёра и проверь решение (check_task). На следующую задачу не переходи; когда закончишь, кратко напиши итог.",
     "lesson": "Пройди текущий урок: выполни все задания в нём и нажми кнопку перехода к следующему уроку (complete_lesson). Дальше не переходи; когда закончишь, кратко напиши итог.",
-    "journey": "Пройди уроки по порядку, начиная с открытого: на каждой странице выполни все задания и переходи дальше (complete_lesson на уроке теории, next_task в тренажёре после решённой проверки). Продолжай, пока страницы не закончатся, затем кратко напиши итог.",
+    # Scoped like a real request ("пройди следующие 2 урока"), so the model knows when it is done.
+    "journey": "Пройди по порядку {n} урока подряд, начиная с открытого: в каждом выполни все задания (в тренажёре — все задачи урока) и переходи к следующему. Когда пройдёшь эти {n} урока, остановись и кратко напиши итог.",
 }
 # Round budget per kind; gpt-oss makes one call per reply.
 ROUNDS = {"trainer": 30, "lesson": 40, "journey": 150}
@@ -52,7 +53,10 @@ async def run_one(scenario: Path, model: str, ollama: str, temperature: float, t
             session.ask_user = oracle_user(client)  # the solver's handoffs get the key answer; counted as asked_user
         t0 = time.monotonic()
         await session.open()
-        out = await session.ask(TASKS[client.kind], rounds or ROUNDS[client.kind])
+        task = TASKS[client.kind]
+        if client.kind == "journey":
+            task = task.format(n=json.loads((scenario / "journey.json").read_text()).get("lessons", len(client.dirs)))
+        out = await session.ask(task, rounds or ROUNDS[client.kind])
         took = time.monotonic() - t0
     transcript.write_text("".join(f"\n── {k} ──\n{t}\n" for k, t in events))
     # where_am_i is also called by the driver itself after every action.

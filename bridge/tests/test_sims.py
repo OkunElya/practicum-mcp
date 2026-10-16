@@ -224,3 +224,26 @@ def test_lenient_mode_lets_a_lesson_finish_with_quizzes_left(tmp_path):
             assert lenient.metrics()["skipped"] > 0  # the left questions are still counted
             return
     pytest.skip("no lesson with a blocking quiz")
+
+
+@needs_scenarios
+def test_past_the_end_the_model_sees_a_real_page_and_denials_not_a_simulation(tmp_path):
+    from sims import LessonSim, load_sim
+
+    sim = load_sim(SCEN / "journey-theory-3-3-9", tmp_path / "w", lenient=True)
+    while not sim.finished:
+        page = sim.cur
+        assert isinstance(page, LessonSim)
+        solve(page)
+        assert not sim._call("complete_lesson", {}).is_error
+    seen = []
+    for tool, args in [("where_am_i", {}), ("read_lesson", {}), ("get_progress", {}), ("open_lesson", {"lesson": "1.1.1"}),
+                       ("go_home", {}), ("next_task", {}), ("complete_lesson", {}), ("answer_quiz", {"block": "q1", "answer": "1"}), ("ask_platform_ai", {"question": "?"})]:
+        r = sim._call(tool, args)
+        seen.append(r.content[0].text)
+        if tool in ("go_home", "next_task", "complete_lesson", "answer_quiz", "open_lesson"):
+            assert r.is_error and r.content[0].text.startswith("[denied] the user did not approve"), (tool, r.content[0].text)
+    text = "\n".join(seen).lower()
+    assert "simulat" not in text and "scenario" not in text, text[:500]
+    assert seen[0].startswith("Page: ") and "Lesson after this one" in seen[0] or "Lesson " in seen[0]
+    assert sim.metrics()["past_end"] >= 4

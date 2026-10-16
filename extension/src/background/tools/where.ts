@@ -42,7 +42,7 @@ export function formatWhere(w: WhereInfo): string {
     lines.push(`Course: ${l.course} › Topic: ${l.topic}`);
     lines.push(`Lesson ${l.position + 1}/${l.topicLessons}: «${l.name}» [${l.type}] id=${l.id}, ${l.solved ? 'solved' : 'not solved'}`);
     if (l.tasks.length) lines.push(`Tasks: ${l.tasks.map((t, i) => `${i + 1}${t.solved ? ' ✓' : ''}`).join(', ')}`);
-    if (l.nextLessonId) lines.push(`Next lesson id: ${l.nextLessonId}`);
+    if (l.nextLessonId) lines.push(`Lesson after this one: id=${l.nextLessonId} (complete_lesson or the last task's next_task opens it; no need to open_lesson)`);
   }
   if (w.task) lines.push(`Current task: ${w.task.index + 1} id=${w.task.id}, ${w.task.solved ? 'solved' : 'not solved'}`);
   if (w.modal) lines.push(`Open dialog: ${w.modal}`);
