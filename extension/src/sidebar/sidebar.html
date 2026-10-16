@@ -36,8 +36,20 @@
     .status.thinking b, .status.acting b { color: var(--run); }
     .status.waiting_user b { color: var(--ask); }
     .status.done b { color: var(--ok); } .status.stopped b { color: var(--err); }
+    #agentbar { display: flex; flex-direction: column; gap: 6px; }
     #agentbar select { flex: 1; }
-    #agentbar select#think { flex: none; }
+    .think { gap: 8px; }
+    .think-label { color: var(--muted); flex: none; }
+    .slider { display: flex; flex-direction: column; min-width: 0; }
+    .slider input { width: 100%; margin: 0; accent-color: var(--run); cursor: pointer; }
+    .slider.auto input { opacity: .45; }
+    /* Tick labels centred under the thumb's stops (the thumb is ~16px wide). */
+    .ticks { display: flex; justify-content: space-between; padding: 0 7px; font-size: 11px; color: var(--muted); user-select: none; }
+    .ticks span { width: 0; display: flex; justify-content: center; white-space: nowrap; cursor: pointer; }
+    .ticks span.on { color: var(--run); font-weight: 600; }
+    .slider.auto .ticks span.on { color: var(--muted); font-weight: 400; }
+    button.chip { flex: none; border-radius: 999px; padding: 1px 9px; font-size: 12px; color: var(--muted); }
+    button.chip[aria-pressed=true] { border-color: var(--run); color: var(--run); font-weight: 600; }
 
     #timeline { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
     .empty { margin: auto; color: var(--muted); text-align: center; max-width: 260px; }
@@ -107,15 +119,16 @@
       <span id="dot" class="dot" title="bridge"></span>
       <button id="clear" title="Start over: clear the timeline (and the agent's conversation)">New chat</button>
     </div>
-    <div class="row" id="agentbar" hidden>
-      <select id="model" title="Who drives: a local Ollama model or Практикум ИИ"></select>
-      <select id="think" title="Reasoning effort (models that support it)">
-        <option value="">think: default</option>
-        <option value="low">think: low</option>
-        <option value="medium">think: medium</option>
-        <option value="high">think: high</option>
-        <option value="off">think: off</option>
-      </select>
+    <div id="agentbar" hidden>
+      <div class="row"><select id="model" title="Who drives: a local Ollama model or Практикум ИИ"></select></div>
+      <div class="row think" id="thinkrow" title="How much the model reasons before it answers (models that support it)">
+        <span class="think-label">Thinking</span>
+        <div class="slider grow" id="think-slider">
+          <input type="range" id="think" min="0" max="3" step="1" value="2" aria-label="Thinking level">
+          <div class="ticks"><span>off</span><span>low</span><span>medium</span><span>high</span></div>
+        </div>
+        <button id="think-auto" class="chip" aria-pressed="true" title="Let the model decide (its default)">auto</button>
+      </div>
     </div>
     <div id="status" class="status"></div>
   </header>

@@ -7,6 +7,9 @@ import type { Item, ThinkingItem } from '../src/shared/transcript';
 // The sidebar page with a fake background: one port the test pushes messages through.
 let push: (msg: SidebarMessage) => void = () => {};
 let connected = false;
+// Settings storage that notifies on change, like browser.storage.
+const store: Record<string, unknown> = { mode: 'agent' };
+const storageListeners: (() => void)[] = [];
 const head: HudState = { connected: true, mode: 'agent', sidebar: true, current: null, queued: 0, entries: [], confirm: null, agent: { name: 'Agent', chat: true, state: 'thinking', text: '', question: null } };
 
 beforeAll(async () => {
@@ -25,7 +28,16 @@ beforeAll(async () => {
       }),
       sendMessage: async () => {},
     },
-    storage: { local: { get: async () => ({ mode: 'agent' }), set: async () => {} }, onChanged: { addListener: () => {} } },
+    storage: {
+      local: {
+        get: async () => ({ ...store }),
+        set: async (patch: Record<string, unknown>) => {
+          Object.assign(store, patch);
+          for (const l of storageListeners) l();
+        },
+      },
+      onChanged: { addListener: (fn: (changes: unknown, area: string) => void) => storageListeners.push(() => fn({}, 'local')) },
+    },
   };
   await import('../src/sidebar/sidebar');
   for (let i = 0; i < 40 && !connected; i++) await new Promise((r) => setTimeout(r, 5));
@@ -59,5 +71,45 @@ describe('sidebar thinking block', () => {
     d.dispatchEvent(new Event('toggle'));
     patch([thinking('Need to call where_am_i first.', false, 4)]);
     expect(d.open).toBe(true);
+  });
+});
+
+const settle = () => new Promise((r) => setTimeout(r, 10));
+const $ = (id: string) => document.getElementById(id)!;
+
+describe('sidebar thinking level', () => {
+  it('is a slider with auto (the model decides) to start with', () => {
+    expect($('thinkrow').hidden).toBe(false);
+    expect($('think').getAttribute('type')).toBe('range');
+    expect($('think-auto').getAttribute('aria-pressed')).toBe('true');
+    expect($('think-slider').classList.contains('auto')).toBe(true);
+  });
+
+  it('saves the level picked on the slider, and auto again', async () => {
+    ($('think-slider').querySelectorAll('.ticks span')[3] as HTMLElement).click();
+    await settle();
+    expect(store.agent).toMatchObject({ think: 'high' });
+    expect(($('think') as HTMLInputElement).value).toBe('3');
+    expect($('think-auto').getAttribute('aria-pressed')).toBe('false');
+
+    const range = $('think') as HTMLInputElement;
+    range.value = '0';
+    range.dispatchEvent(new Event('change'));
+    await settle();
+    expect(store.agent).toMatchObject({ think: 'off' });
+
+    $('think-auto').click();
+    await settle();
+    expect(store.agent).toMatchObject({ think: '' });
+    expect($('think-auto').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('is hidden for Практикум ИИ', async () => {
+    const model = $('model') as HTMLSelectElement;
+    model.value = 'platform';
+    model.dispatchEvent(new Event('change'));
+    await settle();
+    expect(store.agent).toMatchObject({ backend: 'platform' });
+    expect($('thinkrow').hidden).toBe(true);
   });
 });

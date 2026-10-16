@@ -17,7 +17,10 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const timeline = $('timeline');
 const input = $<HTMLTextAreaElement>('input');
 const modelSel = $<HTMLSelectElement>('model');
-const thinkSel = $<HTMLSelectElement>('think');
+const thinkRange = $<HTMLInputElement>('think');
+/** The slider's stops; '' (auto) leaves it to the model. */
+const LEVELS = ['off', 'low', 'medium', 'high'] as const;
+type Think = Settings['agent']['think'];
 
 let settings: Settings = DEFAULT_SETTINGS;
 let head: HudState | null = null;
@@ -253,7 +256,28 @@ function renderModels(): void {
   modelSel.dataset.key = key;
   modelSel.replaceChildren(...opts.map(([v, label]) => Object.assign(el('option', '', label), { value: v })));
   modelSel.value = want;
-  thinkSel.value = settings.agent.think;
+}
+
+/** From the settings only, so a redraw can't move the slider under the user's hand. */
+function renderThink(): void {
+  const think = settings.agent.think;
+  // Практикум ИИ has no reasoning setting.
+  $('thinkrow').hidden = settings.agent.backend === 'platform';
+  const auto = think === '';
+  const at = auto ? LEVELS.indexOf('medium') : LEVELS.indexOf(think);
+  thinkRange.value = String(at);
+  thinkRange.setAttribute('aria-valuetext', auto ? 'auto (the model decides)' : think);
+  $('think-slider').classList.toggle('auto', auto);
+  $('think-auto').setAttribute('aria-pressed', String(auto));
+  showTick(at);
+}
+
+function showTick(at: number): void {
+  $('think-slider').querySelectorAll('.ticks span').forEach((t, i) => t.classList.toggle('on', i === at));
+}
+
+function setThink(think: Think): void {
+  void saveSettings({ agent: { ...settings.agent, think } });
 }
 
 function renderApproval(): void {
@@ -368,7 +392,13 @@ modelSel.addEventListener('change', () => {
   const agent = v === 'platform' ? { ...settings.agent, backend: 'platform' as const } : { ...settings.agent, backend: 'ollama' as const, model: v.slice('ollama:'.length) };
   void saveSettings({ agent });
 });
-thinkSel.addEventListener('change', () => void saveSettings({ agent: { ...settings.agent, think: thinkSel.value as Settings['agent']['think'] } }));
+thinkRange.addEventListener('input', () => {
+  $('think-slider').classList.remove('auto');
+  showTick(Number(thinkRange.value));
+});
+thinkRange.addEventListener('change', () => setThink(LEVELS[Number(thinkRange.value)]));
+$('think-slider').querySelectorAll('.ticks span').forEach((t, i) => t.addEventListener('click', () => setThink(LEVELS[i])));
+$('think-auto').addEventListener('click', () => setThink(''));
 
 // ── connection to the background ────────────────────────────────────────────
 
@@ -395,6 +425,7 @@ function applySettings(s: Settings): void {
   settings = s;
   if (modeChanged && !drawn.size) upsert([], []);
   renderHead();
+  renderThink();
 }
 
 void loadSettings().then((s) => {
