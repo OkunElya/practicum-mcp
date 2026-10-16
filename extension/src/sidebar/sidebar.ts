@@ -230,7 +230,6 @@ function renderHeader(): void {
   $('mode-agent').setAttribute('aria-pressed', String(settings.mode === 'agent'));
   $('dot').className = `dot ${busy() ? 'busy' : head?.connected ? 'on' : ''}`;
   $('dot').title = head?.connected ? 'bridge connected' : 'bridge not connected';
-  $('agentbar').hidden = settings.mode !== 'agent';
 
   const status = $('status');
   const a = head?.agent;
@@ -269,6 +268,7 @@ function renderThink(): void {
   thinkRange.setAttribute('aria-valuetext', auto ? 'auto (the model decides)' : think);
   $('think-slider').classList.toggle('auto', auto);
   $('think-auto').setAttribute('aria-pressed', String(auto));
+  $('think-chip').textContent = `Thinking: ${auto ? 'auto' : think}`;
   showTick(at);
 }
 
@@ -276,7 +276,13 @@ function showTick(at: number): void {
   $('think-slider').querySelectorAll('.ticks span').forEach((t, i) => t.classList.toggle('on', i === at));
 }
 
+function thinkMenu(open: boolean): void {
+  $('think-menu').hidden = !open;
+  $('think-chip').setAttribute('aria-expanded', String(open));
+}
+
 function setThink(think: Think): void {
+  thinkMenu(false);
   void saveSettings({ agent: { ...settings.agent, think } });
 }
 
@@ -379,7 +385,11 @@ input.addEventListener('keydown', (e) => {
   }
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && busy()) stop();
+  if (e.key !== 'Escape') return;
+  if (!$('think-menu').hidden) {
+    thinkMenu(false);
+    $('think-chip').focus();
+  } else if (busy()) stop();
 });
 $('send').addEventListener('click', submit);
 $('stop').addEventListener('click', stop);
@@ -399,6 +409,14 @@ thinkRange.addEventListener('input', () => {
 thinkRange.addEventListener('change', () => setThink(LEVELS[Number(thinkRange.value)]));
 $('think-slider').querySelectorAll('.ticks span').forEach((t, i) => t.addEventListener('click', () => setThink(LEVELS[i])));
 $('think-auto').addEventListener('click', () => setThink(''));
+$('think-chip').addEventListener('click', () => {
+  thinkMenu($('think-menu').hidden === true);
+  if (!$('think-menu').hidden) thinkRange.focus();
+});
+// A click elsewhere or Esc closes the menu (Esc stops a run only when no menu is open).
+document.addEventListener('click', (e) => {
+  if (!$('thinkrow').contains(e.target as Node)) thinkMenu(false);
+});
 
 // ── connection to the background ────────────────────────────────────────────
 

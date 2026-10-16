@@ -78,6 +78,16 @@ const settle = () => new Promise((r) => setTimeout(r, 10));
 const $ = (id: string) => document.getElementById(id)!;
 
 describe('sidebar thinking level', () => {
+  it('shows only the level, in a chip next to Send that opens the slider', () => {
+    expect($('think-chip').textContent).toBe('Thinking: auto');
+    expect($('think-chip').closest('.controls')?.contains($('send'))).toBe(true);
+    expect($('think-menu').hidden).toBe(true);
+    $('think-chip').click();
+    expect($('think-menu').hidden).toBe(false);
+    document.body.click(); // a click elsewhere closes it
+    expect($('think-menu').hidden).toBe(true);
+  });
+
   it('is a slider with auto (the model decides) to start with', () => {
     expect($('thinkrow').hidden).toBe(false);
     expect($('think').getAttribute('type')).toBe('range');
@@ -89,6 +99,8 @@ describe('sidebar thinking level', () => {
     ($('think-slider').querySelectorAll('.ticks span')[3] as HTMLElement).click();
     await settle();
     expect(store.agent).toMatchObject({ think: 'high' });
+    expect($('think-chip').textContent).toBe('Thinking: high');
+    expect($('think-menu').hidden).toBe(true); // closed once a level is picked
     expect(($('think') as HTMLInputElement).value).toBe('3');
     expect($('think-auto').getAttribute('aria-pressed')).toBe('false');
 

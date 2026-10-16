@@ -36,10 +36,16 @@
     .status.thinking b, .status.acting b { color: var(--run); }
     .status.waiting_user b { color: var(--ask); }
     .status.done b { color: var(--ok); } .status.stopped b { color: var(--err); }
-    #agentbar { display: flex; flex-direction: column; gap: 6px; }
-    #agentbar select { flex: 1; }
-    .think { gap: 8px; }
-    .think-label { color: var(--muted); flex: none; }
+    /* The message box's bottom row: model and thinking level as small pickers next to Send. */
+    .controls { gap: 4px; }
+    .pick { font-size: 12px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; min-width: 0; }
+    .pick:hover, .pick:focus-visible, .pick[aria-expanded=true] { border-color: var(--line); color: var(--fg); background: var(--soft); }
+    select.pick { max-width: 45%; text-overflow: ellipsis; cursor: pointer; }
+    button.pick { flex: none; white-space: nowrap; }
+    /* The menu opens above the message box, across its width (anchored to the box, not the chip). */
+    .pop { flex: none; }
+    .menu { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 10; display: flex; gap: 8px; align-items: center;
+      background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; box-shadow: 0 4px 14px #0003; }
     .slider { display: flex; flex-direction: column; min-width: 0; }
     .slider input { width: 100%; margin: 0; accent-color: var(--run); cursor: pointer; }
     .slider.auto input { opacity: .45; }
@@ -101,7 +107,7 @@
     button.stop { font-weight: 600; }
     button.primary { background: var(--run); border-color: var(--run); color: #fff; font-weight: 600; }
     .card input { flex: 1; min-width: 120px; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; background: var(--bg); }
-    .composer { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
+    .composer { position: relative; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
     .composer:focus-within { border-color: var(--run); }
     textarea { border: 0; outline: 0; resize: none; background: transparent; min-height: 40px; max-height: 200px; }
     .hint { color: var(--muted); font-size: 12px; }
@@ -119,17 +125,6 @@
       <span id="dot" class="dot" title="bridge"></span>
       <button id="clear" title="Start over: clear the timeline (and the agent's conversation)">New chat</button>
     </div>
-    <div id="agentbar" hidden>
-      <div class="row"><select id="model" title="Who drives: a local Ollama model or Практикум ИИ"></select></div>
-      <div class="row think" id="thinkrow" title="How much the model reasons before it answers (models that support it)">
-        <span class="think-label">Thinking</span>
-        <div class="slider grow" id="think-slider">
-          <input type="range" id="think" min="0" max="3" step="1" value="2" aria-label="Thinking level">
-          <div class="ticks"><span>off</span><span>low</span><span>medium</span><span>high</span></div>
-        </div>
-        <button id="think-auto" class="chip" aria-pressed="true" title="Let the model decide (its default)">auto</button>
-      </div>
-    </div>
     <div id="status" class="status"></div>
   </header>
   <main id="timeline"></main>
@@ -137,9 +132,20 @@
     <div id="approval" class="card" hidden></div>
     <div id="question" class="card" hidden></div>
     <div id="composer" class="composer" hidden>
-      <textarea id="input" rows="2" placeholder="Ask the agent to do something on Practicum…"></textarea>
-      <div class="row">
-        <span id="composer-hint" class="hint grow">Enter to send · Shift+Enter new line</span>
+      <textarea id="input" rows="2" placeholder="Ask the agent to do something on Practicum…" title="Enter sends · Shift+Enter starts a new line"></textarea>
+      <div class="row controls">
+        <select id="model" class="pick" title="Who drives: a local Ollama model or Практикум ИИ"></select>
+        <div class="pop" id="thinkrow">
+          <button id="think-chip" class="pick" aria-haspopup="true" aria-expanded="false" aria-controls="think-menu" title="How much the model reasons before it answers (models that support it)">Thinking: auto</button>
+          <div class="menu" id="think-menu" hidden>
+            <div class="slider grow" id="think-slider">
+              <input type="range" id="think" min="0" max="3" step="1" value="2" aria-label="Thinking level">
+              <div class="ticks"><span>off</span><span>low</span><span>medium</span><span>high</span></div>
+            </div>
+            <button id="think-auto" class="chip" aria-pressed="true" title="Let the model decide (its default)">auto</button>
+          </div>
+        </div>
+        <span class="grow"></span>
         <button id="stop" class="stop" hidden title="Stop the run (Esc)">Stop</button>
         <button id="send" class="primary">Send</button>
       </div>

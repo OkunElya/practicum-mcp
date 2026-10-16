@@ -1,6 +1,6 @@
 [project]
 name = "practicum-bridge"
-version = "0.2.3"
+version = "0.2.4"
 description = "MCP server bridging to the Practicum browser extension"
 readme = "README.md"
 authors = [
