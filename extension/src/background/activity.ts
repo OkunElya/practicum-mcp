@@ -40,11 +40,13 @@ export class Activity {
 
   /**
    * Ask the user to approve an irreversible action in the HUD. Resolves when
-   * they answer; throws `denied` on "Deny", timeout or abort.
+   * they answer; throws `denied` on "Deny", `timeout` when nobody answered
+   * (not a refusal: the caller may ask again), `stopped` on abort.
    */
   async confirm(text: string, signal: AbortSignal): Promise<void> {
     const id = String(this.nextConfirmId++);
     this.log('ask', `Approve? ${text}`);
+    let timedOut = false;
     const approved = await new Promise<boolean>((resolve) => {
       const done = (ok: boolean) => {
         clearTimeout(timer);
@@ -52,15 +54,21 @@ export class Activity {
         if (this.confirmReq?.id === id) this.confirmReq = null;
         resolve(ok);
       };
-      const timer = setTimeout(() => done(false), CONFIRM_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        timedOut = true;
+        done(false);
+      }, CONFIRM_TIMEOUT_MS);
       const onAbort = () => done(false);
       signal.addEventListener('abort', onAbort);
       this.confirmReq = { id, text, resolve: done };
       this.push();
     });
-    this.log(approved ? 'ok' : 'error', approved ? 'approved' : 'not approved');
+    this.log(approved ? 'ok' : 'error', approved ? 'approved' : timedOut ? 'no answer in time' : 'not approved');
     if (!approved) {
       if (signal.aborted) throw new ToolError('stopped by the user', 'stopped');
+      if (timedOut) {
+        throw new ToolError(`no answer to the approval within ${CONFIRM_TIMEOUT_MS / 60_000} min (the user may be away): ${text}. Nothing was done; it can be asked again.`, 'timeout');
+      }
       throw new ToolError(`the user did not approve: ${text}. Don't retry unless the user asks.`, 'denied');
     }
   }

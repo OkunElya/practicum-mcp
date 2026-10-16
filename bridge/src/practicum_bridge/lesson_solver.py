@@ -195,6 +195,14 @@ class LessonSolver:
         self.samples, self.temperature, self.consult = samples, temperature, consult
         self.seed = 1000
 
+    async def act(self, tool: str, args: dict) -> tuple[str, bool]:
+        """A call that needs the user's approval; asked once more if they didn't answer in time."""
+        out, err = await self.call(tool, args)
+        if err and out.startswith("[timeout] no answer to the approval"):
+            self.note("solver", f"{tool}: approval not answered in time, asking again")
+            out, err = await self.call(tool, args)
+        return out, err
+
     async def read(self, blocks: bool) -> str:
         """The whole read_lesson output, following its offset pages."""
         text, offset = "", 0
@@ -278,7 +286,7 @@ class LessonSolver:
             q = f"Помоги разобраться: как решить такую задачу из урока? Объясни ход решения.\n{b.body[:1200]}"
         else:
             return None
-        out, err = await self.call("ask_platform_ai", {"question": q})
+        out, err = await self.act("ask_platform_ai", {"question": q})
         if err:
             self.note("solver", f"{b.ref}: Практикум ИИ unavailable: {out[:200]}")
             return None
@@ -287,7 +295,7 @@ class LessonSolver:
 
     async def answer(self, b: Block, ans: str, lines: list[str], retry: bool = False) -> str | None:
         """answer_quiz; the tool's output, or None when it failed."""
-        out, err = await self.call("answer_quiz", {"block": b.ref, "answer": ans, **({"retry": True} if retry else {})})
+        out, err = await self.act("answer_quiz", {"block": b.ref, "answer": ans, **({"retry": True} if retry else {})})
         verdict = next((l for l in out.splitlines() if l.startswith(("The page marks", "Verdict", "Correct", "Not correct"))), "")
         lines.append(f"{b.ref} {b.kind}: answered «{ans}»" + (f" → {verdict}" if verdict else "") if not err else f"{b.ref}: answer_quiz failed: {out[:200]}")
         return None if err else out
@@ -311,7 +319,7 @@ class LessonSolver:
             if not code:
                 break
             run, _ = await self.call("run_code_exercise", {"block": b.ref, "code": code})
-            out, err = await self.call("check_code_exercise", {"block": b.ref, "code": code})
+            out, err = await self.act("check_code_exercise", {"block": b.ref, "code": code})
             if not err and out.startswith("Solved"):
                 lines.append(f"{b.ref} code: solved on check {attempt}")
                 return
@@ -334,7 +342,7 @@ class LessonSolver:
                 break
             ctx = self.context(full, b)
             if b.kind == "button":
-                out, err = await self.call("press_action_button", {"block": b.ref})
+                out, err = await self.act("press_action_button", {"block": b.ref})
                 lines.append(f"{b.ref} button pressed" if not err else f"{b.ref}: press failed: {out[:200]}")
                 if err:
                     left.add(b.ref)
@@ -375,7 +383,13 @@ class LessonSolver:
         surveys = [b.ref for b in parse_blocks(await self.read(blocks=True)) if b.kind == "survey" and not b.done]
         if surveys:
             lines.append(f"{', '.join(surveys)}: feedback survey — the user's own opinion, left for the user")
-        out, err = await self.call("complete_lesson", {})
+        remaining = [x for x in parse_blocks(await self.read(blocks=True)) if not x.done and x.kind != "survey"]
+        hidden = [x.ref for x in remaining if x.hidden]
+        if hidden:
+            # What was left for the user still hides part of the lesson: the «next» button can't work yet.
+            lines.append(f"complete_lesson not done: {', '.join(sorted(left))} (left for the user) keep {', '.join(hidden)} hidden")
+            return "\n".join(lines)
+        out, err = await self.act("complete_lesson", {})
         lines.append(f"complete_lesson: {out.splitlines()[0] if out else ''}" if not err else f"complete_lesson not done: {out[:300]}")
         if not err and "\nNow:\n" in out:
             now = out.split("\nNow:\n", 1)[1]

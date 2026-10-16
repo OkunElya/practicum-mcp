@@ -83,25 +83,31 @@ export const goHome: Tool = {
   },
 };
 
+/** The theory lesson's «next» button, or a ToolError saying why it can't be pressed (and what is unanswered). */
+async function nextButton(ctx: ToolContext) {
+  const before = await ctx.page.op<WhereInfo>('where');
+  if (before.kind !== 'lesson' || !before.lesson) {
+    throw new ToolError(before.kind === 'trainer' ? 'on the trainer use next_task instead' : 'no theory lesson is open');
+  }
+  const btn = before.controls.find((c) => c.id === NEXT_BUTTON);
+  if (!btn || !btn.enabled) {
+    const { lesson, answers } = await ctx.page.op<{ lesson: LessonJson; answers: SavedAnswer[] }>('lesson', {});
+    const open = interactiveBlocks(lesson.theory, answers).filter((b) => !b.answer && (b.type !== 'QuizCoding' || b.node.content?.blocking));
+    throw new ToolError(`the «next» button is not available${open.length ? `; unanswered blocks: ${open.map((b) => `${b.ref} ${b.type}`).join(', ')}` : ''}`);
+  }
+  return { before, btn };
+}
+
 export const completeLesson: Tool = {
   spec: spec('complete_lesson'),
   async describe(_args, ctx) {
-    const w = await ctx.page.op<WhereInfo>('where');
-    const btn = w.controls.find((c) => c.id === NEXT_BUTTON);
-    return `Finish «${w.lesson?.name ?? 'this lesson'}» and press «${btn?.label ?? 'next'}»`;
+    // Checked before the approval prompt: don't ask the user to approve a press that can't happen.
+    const { before, btn } = await nextButton(ctx);
+    return `Finish «${before.lesson?.name ?? 'this lesson'}» and press «${btn.label ?? 'next'}»`;
   },
   async run(_args, ctx) {
-    const before = await ctx.page.op<WhereInfo>('where');
-    if (before.kind !== 'lesson' || !before.lesson) {
-      throw new ToolError(before.kind === 'trainer' ? 'on the trainer use next_task instead' : 'no theory lesson is open');
-    }
-    const btn = before.controls.find((c) => c.id === NEXT_BUTTON);
-    if (!btn || !btn.enabled) {
-      const { lesson, answers } = await ctx.page.op<{ lesson: LessonJson; answers: SavedAnswer[] }>('lesson', {});
-      const open = interactiveBlocks(lesson.theory, answers).filter((b) => !b.answer && (b.type !== 'QuizCoding' || b.node.content?.blocking));
-      throw new ToolError(`the «next» button is not available${open.length ? `; unanswered blocks: ${open.map((b) => `${b.ref} ${b.type}`).join(', ')}` : ''}`);
-    }
-    const lessonId = before.lesson.id;
+    const { before, btn } = await nextButton(ctx);
+    const lessonId = before.lesson!.id; // nextButton() made sure a lesson is open
     await ctx.page.op('pressTestId', { testId: NEXT_BUTTON });
     ctx.step(`pressed «${btn.label}», waiting for the next page`);
     const after = await waitForPage(ctx, 'the next page to load', (w) => w.url !== before.url && (w.lesson?.id !== lessonId || w.kind !== before.kind));
