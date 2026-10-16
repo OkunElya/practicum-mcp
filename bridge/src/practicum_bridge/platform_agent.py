@@ -804,7 +804,8 @@ class Session:
         out.facts = self.facts(reasons.get(out.code, str(out.code)))
         self.note("driver summary", out.facts)
         self.say("agent", (f"[{out.status}] " if out.status else "") + (out.answer or ""))
-        self.say("note", out.facts)
+        if self.ledger:  # "nothing changed" after a plain question is noise
+            self.say("note", out.facts)
         self.show("done" if out.code == 0 else "stopped", reasons.get(out.code, ""))
         return out
 

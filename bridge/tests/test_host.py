@@ -124,8 +124,10 @@ def test_agent_mode_runs_a_message_end_to_end(tmp_path):
             # the model's text note isn't sent again.
             assert [e["text"] for e in evs if e["kind"] == "message" and e["role"] == "agent"] == ["Готово."]
             # The order in the timeline: user message, then the call, then the answer.
+            # Seen live: the call overtook the message that led to it. The order in the timeline:
+            # the session's first look at the page, the user's message, its calls, the answer.
             order = [m.get("tool") or m.get("event", {}).get("role") for m in seen if m["type"] == "call" or (m["type"] == "agent" and m["event"]["kind"] == "message" and m["event"]["role"] in ("user", "agent"))]
-            assert order.index("user") < order.index("echo") < order.index("agent")
+            assert order == ["where_am_i", "user", "where_am_i", "echo", "where_am_i", "agent"]
             assert (tmp_path / "agent.log").read_text().count("── fake ──") == 2
             await ws.close()
             task.cancel()

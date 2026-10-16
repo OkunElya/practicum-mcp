@@ -12,6 +12,19 @@ const devSpec = (s: Omit<ToolSpec, 'timeout_s'> & { timeout_s?: number }): ToolS
 export const DEV_TOOLS: Tool[] = [
   {
     spec: devSpec({
+      name: 'dev_open_sidebar_tab',
+      description: '[dev] Open the sidebar page in a tab (WebDriver can only drive tabs, and cannot navigate to moz-extension: URLs).',
+      effect: 'read',
+      params: {},
+    }),
+    async run() {
+      const url = browser.runtime.getURL('sidebar.html');
+      await browser.tabs.create({ url, active: false });
+      return url;
+    },
+  },
+  {
+    spec: devSpec({
       name: 'dev_confirm',
       description: '[dev] Ask the user to approve a fake irreversible action; does nothing else.',
       effect: 'irrev',

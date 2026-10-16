@@ -140,7 +140,10 @@ class ExtensionLink:
     async def _pump_events(self) -> None:
         while True:
             event = await self._events.get()
-            await self._send_ext({"type": "agent", "event": event})
+            try:
+                await self._send_ext({"type": "agent", "event": event})
+            finally:
+                self._events.task_done()
 
     def _remember(self, event: dict) -> None:
         kind = event.get("kind")
@@ -282,6 +285,8 @@ class ExtensionLink:
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._pending[call_id] = _Pending(conn, future, on_progress)
         try:
+            # The hosted agent's events go first: the timeline shows its message before the call it led to.
+            await self._events.join()
             await conn.send(json.dumps({"type": "call", "id": call_id, "tool": tool, "args": args, "source": source}))
             return await asyncio.wait_for(future, timeout)
         except TimeoutError:
