@@ -27,6 +27,8 @@ let head: HudState | null = null;
 let models: ModelList | null = null;
 /** id -> [rev drawn, element] */
 const drawn = new Map<string, [number, HTMLElement]>();
+/** The timeline's items in order (a Map keeps first-insertion order), for Export. */
+const itemsById = new Map<string, Item>();
 /** Details the user opened or closed by hand (id -> open). */
 const opened = new Map<string, boolean>();
 let answerDraft = '';
@@ -191,6 +193,9 @@ function atBottom(): boolean {
 
 function upsert(items: Item[], dropped: string[]): void {
   const stick = atBottom();
+  for (const it of items) itemsById.set(it.id, it);
+  for (const id of dropped) itemsById.delete(id);
+  $<HTMLButtonElement>('export').disabled = !itemsById.size;
   for (const id of dropped) {
     drawn.get(id)?.[1].remove();
     drawn.delete(id);
@@ -358,6 +363,50 @@ function renderHead(): void {
   renderComposer();
 }
 
+// ── export ──────────────────────────────────────────────────────────────────
+
+/** The chat as JSON: what the timeline holds (its last 300 items), times as ISO strings. */
+export function chatJson(now = new Date()): string {
+  const items = [...itemsById.values()].map((it) => {
+    const { rev: _rev, t, ...rest } = it;
+    if ('started' in rest) delete rest.started; // the duration is in `ms`
+    return { time: new Date(t).toISOString(), ...rest };
+  });
+  const a = settings.agent;
+  return JSON.stringify(
+    {
+      format: 'practicum-mcp-chat',
+      version: 1,
+      exported: now.toISOString(),
+      extension: browser.runtime.getManifest().version,
+      mode: settings.mode,
+      agent:
+        settings.mode === 'agent'
+          ? a.backend === 'platform'
+            ? { backend: 'platform' }
+            : { backend: 'ollama', model: a.model || models?.current || '', think: a.think || 'auto' }
+          : null,
+      items,
+    },
+    null,
+    2,
+  );
+}
+
+function exportChat(): void {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+  const url = URL.createObjectURL(new Blob([chatJson(now)], { type: 'application/json' }));
+  const a = el('a');
+  a.href = url;
+  a.download = `practicum-chat-${stamp}.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 // ── input ───────────────────────────────────────────────────────────────────
 
 function submit(): void {
@@ -395,6 +444,7 @@ $('send').addEventListener('click', submit);
 $('stop').addEventListener('click', stop);
 $('stop2').addEventListener('click', stop);
 $('clear').addEventListener('click', () => send({ target: 'background', type: 'clear' }));
+$('export').addEventListener('click', exportChat);
 $('mode-mcp').addEventListener('click', () => void saveSettings({ mode: 'mcp' }));
 $('mode-agent').addEventListener('click', () => void saveSettings({ mode: 'agent' }));
 modelSel.addEventListener('change', () => {
@@ -429,6 +479,7 @@ function connect(): void {
     if (msg.type === 'snapshot') {
       for (const [, [, node]] of drawn) node.remove();
       drawn.clear();
+      itemsById.clear();
       upsert(msg.items, []);
       timeline.scrollTop = timeline.scrollHeight;
     } else upsert(msg.items, msg.dropped);

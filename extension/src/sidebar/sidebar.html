@@ -19,6 +19,7 @@
     button, select, textarea, input { font: inherit; color: inherit; }
     button { cursor: pointer; border: 1px solid var(--line); background: transparent; border-radius: 6px; padding: 3px 8px; }
     button:hover { background: var(--soft); }
+    button:disabled { opacity: .45; cursor: default; background: transparent; }
     select { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; min-width: 0; }
 
     header { border-bottom: 1px solid var(--line); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
@@ -123,6 +124,7 @@
       </div>
       <span class="grow"></span>
       <span id="dot" class="dot" title="bridge"></span>
+      <button id="export" title="Save this chat (messages, thinking, tool calls) as a JSON file" disabled>Export</button>
       <button id="clear" title="Start over: clear the timeline (and the agent's conversation)">New chat</button>
     </div>
     <div id="status" class="status"></div>

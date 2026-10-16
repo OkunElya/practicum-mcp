@@ -27,6 +27,7 @@ beforeAll(async () => {
         onDisconnect: { addListener: () => {} },
       }),
       sendMessage: async () => {},
+      getManifest: () => ({ version: '9.9.9' }),
     },
     storage: {
       local: {
@@ -123,5 +124,38 @@ describe('sidebar thinking level', () => {
     await settle();
     expect(store.agent).toMatchObject({ backend: 'platform' });
     expect($('thinkrow').hidden).toBe(true);
+  });
+});
+
+describe('sidebar export', () => {
+  it('saves the chat as a JSON file', async () => {
+    push({ type: 'snapshot', head, models: { models: ['gpt-oss-32k'], platform: true, current: 'gpt-oss-32k' }, items: [] });
+    expect(($('export') as HTMLButtonElement).disabled).toBe(true); // nothing to export yet
+    const t = Date.UTC(2026, 9, 16, 12, 0, 0);
+    patch([
+      { id: 'a1', t, rev: 1, type: 'user', text: 'где я?' },
+      { id: 'a2', t: t + 1000, rev: 2, type: 'thinking', text: 'Need where_am_i.', streaming: false, ms: 900, turn: '1' },
+      { id: 'a3', t: t + 2000, rev: 3, type: 'tool', callId: '7', source: 'agent', name: 'where_am_i', args: {}, status: 'ok', steps: [], result: 'URL: …', ms: 12, started: t + 2000 },
+      { id: 'a4', t: t + 3000, rev: 4, type: 'text', text: 'Ты на уроке.', streaming: false, turn: '2' },
+    ]);
+    expect(($('export') as HTMLButtonElement).disabled).toBe(false);
+
+    let blob: Blob | null = null;
+    let download = '';
+    URL.createObjectURL = (b: Blob) => ((blob = b), 'blob:test');
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      download = this.download;
+    };
+    $('export').click();
+
+    expect(download).toMatch(/^practicum-chat-\d{4}-\d\d-\d\d-\d{4}\.json$/);
+    const doc = JSON.parse(await blob!.text());
+    expect(doc).toMatchObject({ format: 'practicum-mcp-chat', version: 1, extension: '9.9.9', mode: 'agent' });
+    expect(doc.items.map((i: any) => i.type)).toEqual(['user', 'thinking', 'tool', 'text']);
+    expect(doc.items[0]).toEqual({ time: '2026-10-16T12:00:00.000Z', id: 'a1', type: 'user', text: 'где я?' });
+    expect(doc.items[2]).toMatchObject({ name: 'where_am_i', status: 'ok', result: 'URL: …', ms: 12 });
+    expect(doc.items[2]).not.toHaveProperty('started');
+    expect(doc.items[2]).not.toHaveProperty('rev');
   });
 });

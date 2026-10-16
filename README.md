@@ -77,6 +77,10 @@ At the bottom are the approval card, the agent's questions (candidate answers, a
 - **Stop** (or **Esc**) ends the run.
 - Messages sent during a run wait for it to finish.
 - *New chat* starts over.
+- *Export* (next to *New chat*) saves the chat as JSON: `practicum-chat-<date>-<time>.json` with
+  the mode, the model and every item of the timeline (messages, thinking, tool calls with their
+  arguments, steps and results, notes, questions), each with its time. It covers what the timeline
+  holds (its last 300 items); `~/.config/practicum-mcp/agent.log` has the full record.
 - `/continue` lets the model go on after the round limit.
 
 The header picks the model: any installed Ollama model, or Практикум ИИ. It also sets the
