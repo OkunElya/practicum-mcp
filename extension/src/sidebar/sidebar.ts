@@ -72,23 +72,45 @@ function markdown(text: string): DocumentFragment {
 /** A <details> whose open state is the user's choice once they toggled it. */
 function details(id: string, cls: string, defaultOpen: boolean): HTMLDetailsElement {
   const d = el('details', cls);
-  d.open = opened.get(id) ?? defaultOpen;
-  d.addEventListener('toggle', () => opened.set(id, d.open));
+  setOpen(d, opened.get(id) ?? defaultOpen);
+  // "toggle" also fires for changes made here; only a click that differs from them is the user's choice.
+  d.addEventListener('toggle', () => {
+    if (d.open !== (d.dataset.open === '1')) {
+      opened.set(id, d.open);
+      d.dataset.open = d.open ? '1' : '';
+    }
+  });
   return d;
+}
+
+function setOpen(d: HTMLDetailsElement, open: boolean): void {
+  d.dataset.open = open ? '1' : '';
+  d.open = open;
 }
 
 function seconds(ms: number): string {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 }
 
+/** Expanded while the model thinks (the text flows in), collapsed once it's done, unless the user chose. */
 function thinkingEl(it: ThinkingItem): HTMLElement {
-  const d = details(it.id, `thinking${it.streaming ? ' streaming' : ''}`, false);
+  const d = details(it.id, '', it.streaming);
   const sum = el('summary');
-  const last = it.text.trim().split('\n').at(-1) ?? '';
-  const title = it.streaming ? `Thinking… ${last.slice(-90)}` : `Thought${it.ms ? ` for ${seconds(it.ms)}` : ''}`;
-  sum.append(el('span', 'sum', title));
-  d.append(sum, el('div', 'body', it.text.trim()));
+  sum.append(el('span', 'sum'));
+  d.append(sum, el('div', 'body'));
+  updateThinking(d, it);
   return d;
+}
+
+/** Updated in place while streaming: redrawing the block every batch made it jump. */
+function updateThinking(d: HTMLDetailsElement, it: ThinkingItem): void {
+  d.className = `thinking${it.streaming ? ' streaming' : ''}`;
+  d.querySelector('.sum')!.textContent = it.streaming ? 'Thinking…' : `Thought${it.ms ? ` for ${seconds(it.ms)}` : ''}`;
+  const body = d.querySelector<HTMLElement>('.body')!;
+  const follow = body.scrollHeight - body.scrollTop - body.clientHeight < 30;
+  body.textContent = it.text.trim();
+  setOpen(d, opened.get(it.id) ?? it.streaming);
+  if (follow) body.scrollTop = body.scrollHeight;
 }
 
 const TOOL_ICON: Record<ToolItem['status'], string> = { queued: '○', approval: '⏳', running: '●', ok: '✓', error: '✗', denied: '⊘', stopped: '■' };
@@ -174,6 +196,11 @@ function upsert(items: Item[], dropped: string[]): void {
   for (const it of items) {
     const prev = drawn.get(it.id);
     if (prev && prev[0] === it.rev) continue;
+    if (prev && it.type === 'thinking') {
+      updateThinking(prev[1] as HTMLDetailsElement, it);
+      drawn.set(it.id, [it.rev, prev[1]]);
+      continue;
+    }
     const node = render(it);
     node.dataset.id = it.id;
     if (prev) prev[1].replaceWith(node);
