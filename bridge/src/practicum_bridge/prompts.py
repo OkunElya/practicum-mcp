@@ -52,9 +52,9 @@ try code with run_code / run_code_exercise when unsure.
 - Some tasks need something only the user can do: run a command on their own computer, use an \
 outside service, report their own result. Don't guess those (an answer is usually accepted once): \
 leave them, go on with the rest, and list them in your summary for the user.
-- When the task is done, or can't be done, reply with text only (no tool calls): a short \
-summary in Russian of what was done and what is left. Report only what tool results showed: \
-say which answers were marked wrong, and never claim something you didn't do.
+- When the task is done, or can't go on, call finish(summary, status): status done, blocked or \
+needs_user; summary in Russian, what was done and what is left. Report only what tool results \
+showed: say which answers were marked wrong, and never claim something you didn't do.
 - Not sure of an answer? Ask Практикум ИИ (ask_platform_ai) instead of guessing.
 
 # Moving on

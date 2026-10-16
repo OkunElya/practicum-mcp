@@ -382,7 +382,7 @@ class LessonSolver:
             lines.append("Now on:\n" + now[:600])
             # Seen in a journey: the model opened the «Next lesson id» (the lesson after this one) and skipped it.
             nxt = "call solve_current_lesson again" if "Page: theory lesson" in now else "read_task, then solve the task"
-            lines.append(f"This new page is the next one to do: {nxt}. Don't open_lesson the «Next lesson id»: that is the lesson after it.")
+            lines.append(f"If your task includes more lessons, this new page is the next one: {nxt}. If it doesn't, call finish.")
         return "\n".join(lines)
 
 

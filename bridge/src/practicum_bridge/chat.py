@@ -54,6 +54,7 @@ OUTCOME_HINT = {
     2: "round limit reached; /continue lets the model keep going",
     3: "stopped after repeated failed checks; tell the model what to do next",
     4: "stopped: the model kept repeating a failing call; tell it what to do differently",
+    5: "stopped: no progress for several rounds; see the driver summary",
 }
 
 
@@ -102,8 +103,13 @@ class Console:
         if self.verbose:
             print(f"\n{self.paint('2', f'[{stamp}]')} {self.paint('1', f'── {kind} ──')}\n{text}", flush=True)
             return
-        if kind.startswith("to ") or kind in ("round", "done", "reset chat", "user message"):
+        if kind.startswith("to ") or kind in ("round", "reset chat", "user message", "driver summary"):
             return  # prompts are long, the answer was shown as the model's reply
+        if kind == "done" and text.startswith("["):  # finish(status, summary): the model's own words weren't streamed
+            print(f"{self.paint('1;35', 'summary:')} {text}", flush=True)
+            return
+        if kind == "done":
+            return
         if kind == "tokens":
             print(self.paint("2", f"  [{text}]"), flush=True)
         elif kind.endswith(" thinking"):
@@ -146,6 +152,8 @@ class Chat:
             self.running = None
         if out.code in OUTCOME_HINT:
             self.console("note", OUTCOME_HINT[out.code])
+        if out.facts:
+            print(self.console.paint("2", out.facts), flush=True)
 
     async def read(self) -> str | None:
         prompt = "\001\033[1;32m\002you›\001\033[0m\002 " if self.console.color else "you> "

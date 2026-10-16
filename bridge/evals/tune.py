@@ -71,6 +71,7 @@ async def run_one(scenario: Path, model: str, ollama: str, temperature: float, t
         "kind": client.kind,
         **client.metrics(),
         "outcome": out.code,
+        "status": out.status,
         "rounds": sum(1 for k, _ in events if k == "round"),
         "tool_errors": sum(1 for n, e in acted if e),
         "calls": len(acted),

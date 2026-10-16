@@ -59,6 +59,27 @@ LOOP_STOP = 3
 # Actions that depend on what the page contains (block refs, files): read the page first.
 NEEDS_READ = {"answer_quiz", "press_action_button", "run_code_exercise", "check_code_exercise", "reset_code_exercise", "set_code", "create_file", "run_code", "check_task"}
 PAGE_READS = {"read_lesson", "read_task", "get_code"}
+# Stall watchdog: rounds without progress (a successful action or a page change) before a nudge,
+# then rounds more before the driver stops the run.
+STALL_WARN = 6
+STALL_GRACE = 4
+FINISH_TOOL = {
+    "name": "finish",
+    "description": (
+        "End the task. Call it when the user's task is done (status=done), when it can't go on "
+        "(status=blocked: e.g. a check keeps failing, a block needs the user), or when the rest is "
+        "for the user (status=needs_user). summary: in Russian, what was done and what is left — "
+        "only what tool results showed."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string", "description": "what was done and what is left, from tool results"},
+            "status": {"type": "string", "enum": ["done", "blocked", "needs_user"]},
+        },
+        "required": ["summary", "status"],
+    },
+}
 # On a theory lesson these go to solve_current_lesson when the driver has it: the model, left to
 # itself, skipped quizzes with complete_lesson, answered by pattern or gave up.
 LESSON_ACTIONS = {"answer_quiz", "press_action_button", "complete_lesson", "run_code_exercise", "check_code_exercise"}
@@ -244,6 +265,11 @@ class PlatformBackend:
                 self.note("resend (new chat)", message)
         return None
 
+    finish_hint = "напиши ANSWER: <итог>"
+
+    def nudge(self, text: str) -> None:
+        self.message += f"\n\n{text}"
+
     def off_format(self) -> None:
         self.message = "Ответ не по формату.\n\n" + self.full("")
 
@@ -277,6 +303,8 @@ class OllamaBackend:
     """
 
     hidden = {"reset_platform_ai_chat"}  # it may consult Практикум ИИ via ask_platform_ai
+    native_tools = True  # gets the driver's local tools (finish, solve_current_lesson)
+    finish_hint = "вызови finish с итогом (status: done, blocked или needs_user)"
     KEEP_FULL = 8  # most recent messages sent in full; older tool results are shortened
     PINNED = ("read_task",)  # tools whose latest result is never shortened
     SQUEEZE_AT = 0.75  # share of the context window after which older messages are cut harder
@@ -474,6 +502,9 @@ class OllamaBackend:
             answer = None
         return Turn(calls, answer, [])
 
+    def nudge(self, text: str) -> None:
+        self.messages.append({"role": "user", "content": text})
+
     def off_format(self) -> None:
         self.messages.append({"role": "user", "content": "Ответ не по формату: пустой или вызов инструмента, написанный текстом. Вызови нужный инструмент (через tool call) или напиши итог обычным текстом."})
 
@@ -487,8 +518,10 @@ class OllamaBackend:
 
 @dataclass
 class Outcome:
-    code: int  # 0 answered, 1 the model or the bridge failed, 2 round limit, 3 stopped after failed checks, 4 looping
+    code: int  # 0 answered/finished, 1 the model or the bridge failed, 2 round limit, 3 failed checks, 4 looping, 5 stalled
     answer: str | None = None
+    status: str | None = None  # finish(status=…) when the model ended with it
+    facts: str = ""  # the driver's own summary of what happened (from tool results, not the model)
 
 
 class Session:
@@ -502,9 +535,18 @@ class Session:
     def __init__(self, client: Client, backend, note: Note, solver: bool = True):
         self.client, self.backend, self.note = client, backend, note
         # Local tools run by the driver itself; solve_current_lesson needs structured model calls.
-        self.local: dict[str, Callable] = {}
+        # name -> (spec, async fn(args) -> str)
+        self.local: dict[str, tuple[dict, Callable]] = {}
         if solver and hasattr(backend, "structured"):
-            self.local[SOLVE_TOOL["name"]] = self.solve_lesson
+            spec = {**SOLVE_TOOL, "input_schema": {"type": "object", "properties": {}}}
+            self.local[SOLVE_TOOL["name"]] = (spec, lambda args: self.solve_lesson())
+        if getattr(backend, "native_tools", False):
+            # A tool-calling model keeps calling tools; an explicit way out ends runs cleanly.
+            self.local[FINISH_TOOL["name"]] = (FINISH_TOOL, self.finish)
+        self.finished: tuple[str, str] | None = None  # (status, summary) from finish
+        self.ledger: list[str] = []  # facts of this message's run, for the driver summary
+        self.idle = 0  # rounds since the last progress
+        self.stall_warned = False
         self.ask_user = None  # async (ref, block text, candidates) -> answer | None; set by practicum-chat
         self.solved_pages: set[str] = set()  # pages (URL lines) the lesson solver has worked through
         self.task_solved_on: str | None = None  # the page whose check last said Solved
@@ -526,9 +568,8 @@ class Session:
 
     async def open(self) -> bool:
         self.tools = list((await self.client.list_tools()).tools)
-        for name in self.local:
-            spec = SOLVE_TOOL if name == SOLVE_TOOL["name"] else {"name": name, "description": ""}
-            self.tools.append(SimpleNamespace(name=name, description=spec["description"], input_schema={"type": "object", "properties": {}}, annotations=SimpleNamespace(read_only_hint=False)))
+        for name, (spec, _) in self.local.items():
+            self.tools.append(SimpleNamespace(name=name, description=spec["description"], input_schema=spec["input_schema"], annotations=SimpleNamespace(read_only_hint=False)))
         self.known = {t.name for t in self.tools if visible(t.name, self.backend.hidden)}
         self.read_only = {t.name for t in self.tools if t.annotations and t.annotations.read_only_hint}
         self.where = await self.page()
@@ -557,11 +598,46 @@ class Session:
     async def call(self, tool: str, args: dict) -> tuple[str, bool]:
         if tool in self.local:
             try:
-                return await self.local[tool](), False
+                return await self.local[tool][1](args), False
             except Exception as e:  # a bug in a local tool must not end the run
                 return f"[tool] {tool} failed: {type(e).__name__}: {e}", True
         r = await self.client.call_tool(tool, clean_args(args))
         return text_of(r), bool(r.is_error)
+
+    async def finish(self, args: dict) -> str:
+        status = str(args.get("status") or "done")
+        self.finished = (status if status in ("done", "blocked", "needs_user") else "done", str(args.get("summary") or "").strip())
+        return "ok"
+
+    def record(self, c: dict, out: str, err: bool) -> None:
+        """Keep the facts worth reporting (from tool results) for the driver summary."""
+        tool, args = c["tool"], c["args"]
+        first = out.strip().splitlines()[0] if out.strip() else ""
+        if err:
+            if out.startswith("[denied]"):
+                self.ledger.append(f"отклонено пользователем: {tool}")
+            return
+        lesson = re.search(r"«([^»]+)»", next((l for l in self.page_text.splitlines() if l.startswith("Lesson ")), ""))
+        lesson = f"«{lesson.group(1)}»" if lesson else ""
+        if tool == "complete_lesson":
+            self.ledger.append(first)
+        elif tool in CHECK_TOOLS:
+            checker = next((l for l in out.splitlines() if l.startswith("Checker:")), "")
+            self.ledger.append(f"проверка {args.get('block', '')} ({lesson}): {first}" + (f" — {short(checker, 160)}" if checker and not first.startswith("Solved") else ""))
+        elif tool == "answer_quiz":
+            verdict = next((l for l in out.splitlines() if l.startswith(("The page marks", "Verdict", "Correct", "Not correct"))), "")
+            self.ledger.append(f"{args.get('block')} «{args.get('answer')}» ({lesson}) → {verdict or 'отправлено'}")
+        elif tool == SOLVE_TOOL["name"]:
+            keep = ("answered", "LEFT FOR THE USER", "complete_lesson:", "complete_lesson not done", "solved on check", "survey", "the user answered")
+            self.ledger += [f"  {l}" for l in out.splitlines() if any(k in l for k in keep) and not l.startswith("Lesson after")]
+        elif tool == "next_task":
+            self.ledger.append("next_task → " + next((l for l in out.splitlines() if l.startswith("Lesson ")), first))
+        elif tool in ("set_code", "create_file"):
+            self.ledger.append(f"{tool} {args.get('file', '')}".strip())
+
+    def facts(self, reason: str) -> str:
+        lines = self.ledger[-40:] or ["ничего не изменено"]
+        return f"Итог по журналу драйвера ({reason}):\n" + "\n".join(f"- {l}" if not l.startswith("  ") else l for l in lines)
 
     async def solve_lesson(self) -> str:
         async def bridge_call(tool: str, args: dict) -> tuple[str, bool]:
@@ -569,7 +645,10 @@ class Session:
             return text_of(r), bool(r.is_error)
 
         solver = LessonSolver(bridge_call, self.backend, self.note, self.ask_user)
-        return await solver.solve()
+        report = await solver.solve()
+        # Models lose count across lessons ("3 lessons done" after 2): give them the driver's count.
+        done = sum(1 for l in self.ledger if "marked solved" in l) + report.count("marked solved")
+        return f"{report}\nLessons completed in this task so far: {done}."
 
     async def user_call(self, tool: str, args: dict) -> tuple[str, bool]:
         """A call the user makes by hand; the model hears about it with the next message."""
@@ -609,28 +688,56 @@ class Session:
         self.refused = 0
         self.last_read = None
         self.failed_check = None
+        self.finished = None
+        self.ledger = []
+        self.idle, self.stall_warned = 0, False
         self.backend.user(text, changed, self.page_text)
         return await self.resume(rounds)
 
     async def resume(self, rounds: int) -> Outcome:
+        out = await self._loop(rounds)
+        reasons = {0: "задача завершена моделью", 1: "сбой модели или моста", 2: "кончился лимит ходов", 3: "проверка не прошла 3 раза подряд", 4: "модель повторяла одно и то же", 5: "нет продвижения"}
+        out.facts = self.facts(reasons.get(out.code, str(out.code)))
+        self.note("driver summary", out.facts)
+        return out
+
+    async def _loop(self, rounds: int) -> Outcome:
         for rnd in range(1, rounds + 1):
             self.note("round", str(rnd))
             turn = await self.backend.turn()
             if turn is None:
                 return Outcome(1)
+            self.progressed = False
             if not turn.calls:
                 if turn.answer is not None:
                     self.note("done", turn.answer)
                     return Outcome(0, turn.answer)
                 self.note("off format", "asking again")
                 self.backend.off_format()
-                continue
-            if code := await self._execute(turn):
+            elif code := await self._execute(turn):
+                if code == "finish":
+                    status, summary = self.finished
+                    self.note("done", f"[{status}] {summary}")
+                    return Outcome(0, summary, status)
                 return Outcome(code)
+            # Stall watchdog: endings dragged on with reads, refusals and errors.
+            self.idle = 0 if self.progressed else self.idle + 1
+            if self.progressed:
+                self.stall_warned = False
+            elif self.idle >= STALL_WARN + STALL_GRACE:
+                self.note("stopped", f"no progress for {self.idle} rounds")
+                return Outcome(5)
+            elif self.idle >= STALL_WARN and not self.stall_warned:
+                self.stall_warned = True
+                self.note("nudge", f"no progress for {self.idle} rounds")
+                self.backend.nudge(
+                    f"Уже {self.idle} ходов ничего не меняется (только чтения, ошибки или отказы). Если задача выполнена "
+                    f"или дальше идти нельзя — {self.backend.finish_hint}. Иначе сделай конкретное действие."
+                )
         self.note("stopped", f"round limit ({rounds}) reached")
         return Outcome(2)
 
-    async def _execute(self, turn: Turn) -> int | None:
+    async def _execute(self, turn: Turn) -> int | str | None:
         """Run one turn's calls and report the results to the backend; an Outcome code when the driver must stop."""
         done: list[Executed] = []
         changed = None
@@ -717,6 +824,13 @@ class Session:
                 sig = f"{c['tool']}({json.dumps(c['args'], ensure_ascii=False)})"
                 self.note(f"{sig}{' ERROR' if err else ''}", out)
                 done.append(Executed(c, out, err))
+                self.record(c, out, err)
+                if c["tool"] == FINISH_TOOL["name"] and not err and self.finished:
+                    halted = "finish"
+                    stop_reason = "задача завершена (finish)"
+                    continue
+                if not err and c["tool"] not in self.read_only:
+                    self.progressed = True
                 self.history.append(f"- {sig} → {short(out)}")
                 if not err and c["tool"] in PAGE_READS and self.reads_this_page(c, out):
                     self.must_read = False
@@ -763,6 +877,7 @@ class Session:
             self.note("page changed", f"{self.where}\n→ {now}")
             self.where = now
             self.must_read = True
+            self.progressed = True
         self.backend.results(done, turn.bad, page_changed)
         return halted
 

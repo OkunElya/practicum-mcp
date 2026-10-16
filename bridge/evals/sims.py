@@ -110,7 +110,7 @@ class Course:
         if trainer and lesson.get("tasks"):
             lines.append("Tasks: " + ", ".join(str(i + 1) for i in range(len(lesson["tasks"]))))
         if lesson.get("next_lesson_id"):
-            lines.append(f"Lesson after this one: id={lesson['next_lesson_id']} (complete_lesson or the last task's next_task opens it; no need to open_lesson)")
+            lines.append("Lesson after this one: complete_lesson (or the last task's next_task) opens it")
         if trainer and lesson.get("tasks"):
             lines.append(f"Current task: 1 id={lesson['tasks'][0]['id']}, not solved")
             lines += ["Buttons on screen:", "- Проверить (check-task-button)", "- Подсказка (trainer-hint-button)"]
@@ -352,7 +352,7 @@ class TrainerSim(BaseSim):
 
     def t_where_am_i(self):
         text = self.status((self.sc / "where.txt").read_text())
-        text = re.sub(r"^Next lesson id: (\S+)$", r"Lesson after this one: id=\1 (complete_lesson or the last task's next_task opens it; no need to open_lesson)", text, flags=re.M)
+        text = re.sub(r"^Next lesson id: (\S+)$", "Lesson after this one: complete_lesson (or the last task's next_task) opens it", text, flags=re.M)
         if self.solved and "next-task-button" not in text:
             text = text.rstrip("\n") + "\n- Далее (next-task-button)\n"  # the real page shows it after a solved check
         return result(text)
@@ -620,7 +620,7 @@ class LessonSim(BaseSim):
             f"Lesson {int(l.get('position') or 0) + 1}/{l.get('topic_lessons_count', '?')}: «{l['name']}» [{l.get('lesson_type')}] id={l['id']}, {'solved' if l.get('solved') else 'not solved'}",
         ]
         if l.get("next_lesson_id"):
-            lines.append(f"Lesson after this one: id={l['next_lesson_id']} (complete_lesson or the last task's next_task opens it; no need to open_lesson)")
+            lines.append("Lesson after this one: complete_lesson (or the last task's next_task) opens it")
         lines.append("Buttons on screen:")
         label = "Перейти к заданию" if self.meta.get("practice_next") else "К следующему уроку"
         lines.append(f"- {label} ({NEXT_BUTTON})" if not self.required_open() else f"- {label} ({NEXT_BUTTON}) [disabled]")

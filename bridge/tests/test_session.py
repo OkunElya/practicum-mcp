@@ -50,8 +50,13 @@ class FakeBackend:
     async def turn(self):
         return self.turns.pop(0) if self.turns else Turn([], "done", [])
 
+    finish_hint = "call finish"
+
     def off_format(self):
         pass
+
+    def nudge(self, text):
+        self.nudges = getattr(self, "nudges", []) + [text]
 
     def results(self, done, bad, page_changed):
         self.reported.append(done)
@@ -281,7 +286,7 @@ def test_lesson_actions_go_to_the_solver_on_a_theory_lesson():
         ran.append(1)
         return "q1 answered «1»\ncomplete_lesson: not done"
 
-    s.local["solve_current_lesson"] = fake_solver
+    s.local["solve_current_lesson"] = ({"name": "solve_current_lesson", "description": "", "input_schema": {"type": "object", "properties": {}}}, lambda args: fake_solver())
 
     async def go():
         await s.open()
@@ -292,3 +297,37 @@ def test_lesson_actions_go_to_the_solver_on_a_theory_lesson():
     assert asyncio.run(go()).code == 0
     assert ran == [1]  # complete_lesson was routed to the solver
     assert not any(n in ("complete_lesson", "answer_quiz") for n, _ in c.calls)  # and the agent's own answer refused after it
+
+
+
+def test_finish_ends_the_run_with_its_status_and_the_driver_keeps_the_facts():
+    from practicum_bridge.platform_agent import FINISH_TOOL
+
+    check = Turn([{"tool": "check_task", "args": {}}], None, [])
+    finish = Turn([{"tool": "finish", "args": {"summary": "Задача решена", "status": "done"}}], None, [])
+    c, s = make([check, finish, Turn([], "never reached", [])], replies={"check_task": "Solved ✓ (attempt 7)"})
+
+    async def go():
+        s.local["finish"] = (FINISH_TOOL, s.finish)
+        await s.open()
+        return await s.ask("реши", 10)
+
+    out = asyncio.run(go())
+    assert (out.code, out.status, out.answer) == (0, "done", "Задача решена")
+    assert "Solved ✓ (attempt 7)" in out.facts  # the driver's own record, not the model's words
+
+
+def test_stall_watchdog_nudges_then_stops():
+    from practicum_bridge.platform_agent import STALL_GRACE, STALL_WARN
+
+    reads = [Turn([{"tool": "read_lesson", "args": {"offset": i}}], None, []) for i in range(30)]  # different reads, no progress
+    c, s = make(reads)
+
+    async def go():
+        await s.open()
+        return await s.ask("что-нибудь", 40)
+
+    out = asyncio.run(go())
+    assert out.code == 5
+    assert len(s.backend.nudges) == 1
+    assert sum(1 for n, _ in c.calls if n == "read_lesson") == STALL_WARN + STALL_GRACE
