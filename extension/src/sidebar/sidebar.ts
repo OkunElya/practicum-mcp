@@ -85,6 +85,10 @@ function details(id: string, cls: string, defaultOpen: boolean): HTMLDetailsElem
       d.dataset.open = d.open ? '1' : '';
     }
   });
+  // Selecting text in the summary (a drag ends in a click) shouldn't toggle it.
+  d.addEventListener('click', (e) => {
+    if ((e.target as Element).closest('summary')?.parentElement === d && !document.getSelection()?.isCollapsed) e.preventDefault();
+  });
   return d;
 }
 
