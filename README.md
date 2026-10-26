@@ -24,7 +24,7 @@ origin presenting its pairing token.
 
 You need two parts: the **extension** in Firefox or Waterfox (≥ 128) and the **bridge**, a small
 local program it talks to. For agent mode (chatting in the sidebar) you also need
-[Ollama](https://ollama.com) with a model, or you can let Практикум ИИ drive.
+[Ollama](https://ollama.com) or Strata with a model, or you can let Практикум ИИ drive.
 
 ### From a release (no build tools needed)
 
@@ -126,8 +126,8 @@ At the bottom are the approval card, the agent's questions (candidate answers, a
   holds (its last 300 items); `~/.config/practicum-mcp/agent.log` has the full record.
 - `/continue` lets the model go on after the round limit.
 
-The header picks the model: any installed Ollama model, or Практикум ИИ. It also sets the
-reasoning effort.
+The header picks the model: any installed Ollama model, the model a running Strata server
+serves (listed as `strata/<id>`), or Практикум ИИ. It also sets the reasoning effort.
 
 ```sh
 uv run --directory bridge practicum-bridge --model gpt-oss-32k   # default model for agent mode
@@ -173,12 +173,29 @@ one action runs per round; every chat message and every action still needs your 
 overlay. The platform keeps one chat per lesson, so after a page change the driver repeats the
 instructions.
 
-## Local models (Ollama)
+## Local models (Ollama, Strata)
 
 `uv run --directory bridge practicum-local-agent --model gpt-oss-32k [--think low] "<task>"` runs the
 same loop with a local model through Ollama's `/api/chat`; the conversation is kept by the driver,
 and the model may consult Практикум ИИ via `ask_platform_ai`. Ollama's default context is 4k, which
 cuts off the tool list: use a variant from [`models/`](models/) or `--num-ctx 32768`.
+
+Models served by [Strata](#strata) work the same way: name them `strata/<id>`.
+
+### Strata
+
+Start the server with `strata launch`, then pick `strata/<id>` in the sidebar or pass it as
+`--model` (`strata/strata` for a default launch). The bridge, `practicum-chat` and
+`practicum-local-agent` talk to Strata's OpenAI-compatible API:
+- `--strata URL` sets its address, default `http://127.0.0.1:8080/v1` (`strata connect` shows
+  the address and key of the running server); `--strata ""` stops the bridge from looking for it.
+- The API key comes from `$STRATA_API_KEY`, else `strata-local` (Strata's default).
+- Thinking `off` turns off Qwen's thinking (`enable_thinking: false`); `low`/`medium`/`high` are sent
+  as `reasoning_effort`.
+- If the server doesn't report its context window, give `practicum-chat` or `practicum-local-agent`
+  `--num-ctx` with the size it was launched with, so older messages get shortened before it fills.
+- One chat can switch between Strata models, but not between Strata and Ollama: start a new
+  conversation for that.
 
 Local models don't use Практикум ИИ's text protocol. They get real tool definitions and their own
 English system prompt, `LOCAL_SYSTEM` in

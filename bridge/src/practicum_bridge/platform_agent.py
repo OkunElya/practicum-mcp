@@ -9,8 +9,8 @@ chat per lesson, so after a page change the next message repeats the protocol,
 the task and a log of what was done. Before round 1 the lesson's chat is reset
 (reset_platform_ai_chat, approved by the user) unless --keep-chat is given.
 
-The same loop also drives a local model through Ollama (`practicum-local-agent`)
-with native tool calling and its own system prompt (prompts.py): the conversation
+The same loop also drives a local model through Ollama or Strata
+(`practicum-local-agent`, StrataBackend for models named "strata/<id>") with native tool calling and its own system prompt (prompts.py): the conversation
 is kept here, so nothing has to be repeated after a page change, and the local
 model may consult Практикум ИИ through ask_platform_ai.
 
@@ -26,6 +26,7 @@ import argparse
 import asyncio
 import http.client
 import json
+import os
 import re
 import sys
 import threading
@@ -348,6 +349,7 @@ class OllamaBackend:
     """
 
     hidden = {"reset_platform_ai_chat"}  # it may consult Практикум ИИ via ask_platform_ai
+    server = "ollama"  # for error notes
     native_tools = True  # gets the driver's local tools (finish, solve_current_lesson)
     finish_hint = "вызови finish с итогом (status: done, blocked или needs_user)"
     KEEP_FULL = 8  # most recent messages sent in full; older tool results are shortened
@@ -497,7 +499,7 @@ class OllamaBackend:
                 data = await asyncio.to_thread(post)
                 return json.loads((data.get("message") or {}).get("content") or "")
             except (OSError, http.client.HTTPException, ValueError) as e:
-                self.note("ollama error", f"structured call: {e}")
+                self.note(f"{self.server} error", f"structured call: {e}")
         return None
 
     async def turn(self) -> Turn | None:
@@ -518,7 +520,7 @@ class OllamaBackend:
                         body = e.read().decode(errors="replace")[:500]
                     except Exception:
                         pass
-                self.note("ollama error", f"{e} {body}".strip())
+                self.note(f"{self.server} error", f"{e} {body}".strip())
                 if attempt == 3:
                     return None
                 if "error parsing tool call" in body:
@@ -581,6 +583,206 @@ class OllamaBackend:
             if page_changed and i == len(done) - 1:
                 content += "\n\n(Открылась другая страница.)"
             self.messages.append({"role": "tool", "tool_name": e.call["tool"], "content": content})
+
+
+STRATA_PREFIX = "strata/"  # how Strata's models are told from Ollama's in the model pickers
+STRATA_URL = "http://127.0.0.1:8080/v1"  # where `strata launch` serves by default
+STRATA_KEY = os.environ.get("STRATA_API_KEY", "strata-local")  # strata launch's default key
+
+
+def is_strata(model: str) -> bool:
+    return model.startswith(STRATA_PREFIX)
+
+
+def openai_messages(messages: list[dict]) -> list[dict]:
+    """The history (Ollama's shape) in OpenAI's: tool calls get ids and results refer to them."""
+    out, pending, n = [], [], 0
+    for m in messages:
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            calls = []
+            for c in m["tool_calls"]:
+                fn = c.get("function") or {}
+                args = fn.get("arguments") or {}
+                n += 1
+                calls.append({
+                    "id": c.get("id") or f"call_{n}",
+                    "type": "function",
+                    "function": {"name": fn.get("name", ""), "arguments": args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)},
+                })
+            pending = [c["id"] for c in calls]
+            out.append({"role": "assistant", "content": m.get("content") or "", "tool_calls": calls})
+        elif m["role"] == "tool":
+            n += 1
+            out.append({"role": "tool", "tool_call_id": pending.pop(0) if pending else f"call_{n}", "content": m["content"]})
+        else:
+            out.append({"role": m["role"], "content": m.get("content") or ""})
+    return out
+
+
+class StrataBackend(OllamaBackend):
+    """A local model served by Strata (`strata launch`) through its OpenAI-compatible API.
+
+    The history, the squeeze and the turn handling are OllamaBackend's: requests are
+    translated to /v1/chat/completions and replies back to Ollama's shape. Its models
+    are named "strata/<id>"; `base_url` ends in /v1.
+    """
+
+    server = "strata"
+
+    def __init__(
+        self,
+        note: Note,
+        model: str,
+        base_url: str = STRATA_URL,
+        num_ctx: int | None = None,  # the window the server was started with, if it doesn't report one
+        temperature: float = 0.2,
+        think: str | None = None,
+        stream: Stream | None = None,
+        system: str = LOCAL_SYSTEM,
+        key: str = STRATA_KEY,
+    ):
+        super().__init__(note, model, base_url, num_ctx, temperature, think, stream, system)
+        self.key = key
+
+    @property
+    def api_model(self) -> str:
+        return self.model.removeprefix(STRATA_PREFIX)
+
+    def _request(self, path: str, payload: dict | None, timeout: float):
+        headers = {"authorization": f"Bearer {self.key}"}
+        if payload is not None:
+            headers["content-type"] = "application/json"
+        data = None if payload is None else json.dumps(payload).encode()
+        return self.opener.open(urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers), timeout=timeout)
+
+    def _model_ctx(self) -> int | None:
+        if n := self.options.get("num_ctx"):
+            return n
+        try:
+            with self._request("/models", None, 10) as r:
+                models = json.loads(r.read()).get("data") or []
+        except (OSError, ValueError):
+            return None
+        m = next((m for m in models if m.get("id") == self.api_model), {})
+        n = m.get("context_length") or m.get("max_model_len") or m.get("context_window")
+        return n if isinstance(n, int) and n > 0 else None
+
+    def _payload(self, messages: list[dict], options: dict) -> dict:
+        payload: dict = {"model": self.api_model, "messages": openai_messages(messages), "temperature": options.get("temperature", 0.2)}
+        if "seed" in options:
+            payload["seed"] = options["seed"]
+        if self.think == "off":
+            payload["chat_template_kwargs"] = {"enable_thinking": False}  # Qwen's switch
+        elif self.think:
+            payload["reasoning_effort"] = self.think
+        return payload
+
+    @staticmethod
+    def _reply(content: str, thinking: str, calls: list[dict], finish: str | None, usage: dict | None) -> dict:
+        """A reply in the shape OllamaBackend.turn reads."""
+        usage = usage or {}
+        return {
+            "message": {"role": "assistant", "content": content, "thinking": thinking, "tool_calls": calls},
+            "done_reason": finish,
+            "prompt_eval_count": usage.get("prompt_tokens"),
+            "eval_count": usage.get("completion_tokens"),
+        }
+
+    @staticmethod
+    def _call(id: str | None, name: str, arguments: str) -> dict:
+        try:
+            args = json.loads(arguments) if arguments.strip() else {}
+        except ValueError:
+            args = arguments  # turn() treats it as no arguments; the tool's error tells the model
+        return {"id": id, "function": {"name": name, "arguments": args}}
+
+    def _post(self, extra: list[dict] | None = None, options: dict | None = None) -> dict:
+        payload = self._payload(self._view() + (extra or []), options or self.options)
+        if self.tools:
+            payload["tools"] = self.tools
+        if self.stream is not None:
+            payload |= {"stream": True, "stream_options": {"include_usage": True}}
+        with self._request("/chat/completions", payload, 900) as r:
+            if self.stream is None:
+                data = json.loads(r.read())
+                choice = (data.get("choices") or [{}])[0]
+                msg = choice.get("message") or {}
+                inline, content = split_think(msg.get("content") or "")
+                thinking = (msg.get("reasoning_content") or msg.get("reasoning") or "") + inline
+                calls = [self._call(c.get("id"), (c.get("function") or {}).get("name", ""), (c.get("function") or {}).get("arguments") or "") for c in msg.get("tool_calls") or []]
+                return self._reply(content, thinking, calls, choice.get("finish_reason"), data.get("usage"))
+            content, thinking, parts = [], [], {}
+            finish, usage = None, None
+            splitter = ThinkSplitter()
+
+            def text(piece: str) -> None:
+                for part, t in splitter.feed(piece) if piece else splitter.flush():
+                    (thinking if part == "thinking" else content).append(t)
+                    self.stream(f"{self.name} thinking" if part == "thinking" else self.name, t)
+
+            for raw in r:  # server-sent events: "data: {…}" lines, then "data: [DONE]"
+                if self._abort.is_set():
+                    break
+                line = raw.decode(errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                body = line.removeprefix("data:").strip()
+                if body == "[DONE]":
+                    break
+                chunk = json.loads(body)
+                if chunk.get("error"):
+                    raise ValueError(chunk["error"])
+                usage = chunk.get("usage") or usage
+                for choice in chunk.get("choices") or []:
+                    d = choice.get("delta") or {}
+                    if t := d.get("reasoning_content") or d.get("reasoning"):
+                        thinking.append(t)
+                        self.stream(f"{self.name} thinking", t)
+                    if c := d.get("content"):
+                        text(c)
+                    for tc in d.get("tool_calls") or []:
+                        p = parts.setdefault(tc.get("index", len(parts)), {"id": None, "name": "", "arguments": ""})
+                        fn = tc.get("function") or {}
+                        p["id"] = tc.get("id") or p["id"]
+                        p["name"] += fn.get("name") or ""
+                        p["arguments"] += fn.get("arguments") or ""
+                    finish = choice.get("finish_reason") or finish
+            text("")  # whatever the splitter held back
+            calls = [self._call(p["id"], p["name"], p["arguments"]) for _, p in sorted(parts.items())]
+            return self._reply("".join(content), "".join(thinking), calls, finish, usage)
+
+    async def structured(self, messages: list[dict], schema: dict, temperature: float, seed: int) -> dict | None:
+        payload = self._payload(messages, {**self.options, "temperature": temperature, "seed": seed})
+        payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "reply", "schema": schema}}
+
+        def post() -> dict:
+            with self._request("/chat/completions", payload, 900) as r:
+                return json.loads(r.read())
+
+        for _ in range(2):
+            try:
+                data = await asyncio.to_thread(post)
+                msg = (data.get("choices") or [{}])[0].get("message") or {}
+                return json.loads(split_think(msg.get("content") or "")[1])
+            except (OSError, http.client.HTTPException, ValueError) as e:
+                self.note(f"{self.server} error", f"structured call: {e}")
+        return None
+
+
+def local_backend(
+    note: Note,
+    model: str,
+    ollama: str,
+    strata: str,
+    num_ctx: int | None,
+    temperature: float,
+    think: str | None = None,
+    stream: Stream | None = None,
+) -> OllamaBackend:
+    """The backend for a local model: "strata/<id>" is served by Strata, anything else by Ollama."""
+    if is_strata(model):
+        return StrataBackend(note, model, strata, num_ctx, temperature, think, stream)
+    return OllamaBackend(note, model, ollama, num_ctx, temperature, think, stream)
 
 
 @dataclass
@@ -1042,16 +1244,17 @@ def main() -> None:
 def local_main() -> None:
     p = argparse.ArgumentParser(prog="practicum-local-agent", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     _common(p)
-    p.add_argument("--model", required=True, help="Ollama model, e.g. gpt-oss-32k")
+    p.add_argument("--model", required=True, help="Ollama model, e.g. gpt-oss-32k, or strata/<id> for a model Strata serves")
     p.add_argument("--ollama", default="http://127.0.0.1:11434", help="Ollama base URL")
+    p.add_argument("--strata", default=STRATA_URL, help="Strata's OpenAI-compatible base URL (key: $STRATA_API_KEY, else strata-local)")
     p.add_argument("--num-ctx", type=int, default=None, help="context window to request (default: the model's own setting)")
     p.add_argument("--temperature", type=float, default=0.2, help="0.2 scored best in evals/tune.py")
-    p.add_argument("--think", choices=["low", "medium", "high"], help="reasoning effort for models that support it (gpt-oss)")
+    p.add_argument("--think", choices=["low", "medium", "high", "off"], help="reasoning effort for models that support it")
     p.add_argument("--log", type=Path, default=Path("local-agent.log"))
     p.add_argument("--no-solver", action="store_true", help="don't offer solve_current_lesson (block-by-block lesson solver)")
     p.set_defaults(rounds=30)  # one tool call per reply: a simple trainer task takes 14-19 rounds
     a = p.parse_args()
-    make = lambda client, note: OllamaBackend(note, a.model, a.ollama, a.num_ctx, a.temperature, a.think)  # noqa: E731
+    make = lambda client, note: local_backend(note, a.model, a.ollama, a.strata, a.num_ctx, a.temperature, a.think)  # noqa: E731
     sys.exit(asyncio.run(run(a.task, a.rounds, a.url, a.log, make, not a.no_solver)))
 
 

@@ -348,3 +348,120 @@ def test_finish_written_as_text_is_taken_as_the_call():
     b._post = post
     turn = asyncio.run(b.turn())
     assert turn.calls == [{"tool": "finish", "args": {"status": "done", "summary": "Всё сделано"}}]
+
+
+def fake_openai_server(replies):
+    """A /v1 server that answers each chat request with the next of `replies` (SSE lines when streaming)."""
+    import http.server
+    import json
+    import threading
+
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = json.dumps({"data": [{"id": "qwen", "context_length": 32768}]}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            req = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            seen.append((self.headers.get("authorization"), req))
+            reply = replies.pop(0)
+            self.send_response(200)
+            self.end_headers()
+            if req.get("stream"):
+                for chunk in reply:
+                    self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+            else:
+                self.wfile.write(json.dumps(reply).encode())
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}/v1", seen
+
+
+def test_strata_streams_tool_calls_and_sends_them_back_with_ids():
+    from practicum_bridge.platform_agent import StrataBackend
+
+    call = [
+        {"choices": [{"delta": {"reasoning_content": "надо прочитать"}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "read_lesson", "arguments": '{"off'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'set": 2}'}}]}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 900, "completion_tokens": 20}},
+    ]
+    answer = [{"choices": [{"delta": {"content": "<think>всё</think>Готово"}, "finish_reason": "stop"}]}]
+    srv, url, seen = fake_openai_server([call, answer])
+    streamed = []
+    try:
+        b = StrataBackend(lambda k, t: None, "strata/qwen", url, None, 0.2, "off", lambda k, t: streamed.append((k, t)), key="k")
+        asyncio.run(b.start([tool("read_lesson", True)], lambda s: s))
+        assert b.ctx == 32768
+        b.user("прочитай", False, "")
+        turn = asyncio.run(b.turn())
+        assert turn.calls == [{"tool": "read_lesson", "args": {"offset": 2}}] and b.prompt_tokens == 900
+        from practicum_bridge.platform_agent import Executed
+
+        b.results([Executed(turn.calls[0], "текст урока", False)], [], False)
+        turn = asyncio.run(b.turn())
+        assert turn.answer == "Готово"
+    finally:
+        srv.shutdown()
+    auth, first = seen[0]
+    assert auth == "Bearer k" and first["model"] == "qwen" and first["stream"] is True
+    assert first["chat_template_kwargs"] == {"enable_thinking": False} and first["tools"][0]["function"]["name"] == "read_lesson"
+    msgs = seen[1][1]["messages"]
+    assert msgs[-2]["tool_calls"] == [{"id": "c1", "type": "function", "function": {"name": "read_lesson", "arguments": '{"offset": 2}'}}]
+    assert msgs[-1] == {"role": "tool", "tool_call_id": "c1", "content": "текст урока"}
+    assert ("strata/qwen thinking", "надо прочитать") in streamed and ("strata/qwen thinking", "всё") in streamed
+
+
+def test_strata_without_streaming_and_structured_calls():
+    from practicum_bridge.platform_agent import StrataBackend
+
+    plain = {
+        "choices": [{"message": {"content": "", "reasoning_content": "хм", "tool_calls": [{"id": "x", "function": {"name": "finish", "arguments": '{"status": "done"}'}}]}, "finish_reason": "length"}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+    }
+    structured = {"choices": [{"message": {"content": '<think>…</think>{"answer": "2"}'}}]}
+    srv, url, seen = fake_openai_server([plain, structured])
+    try:
+        b = StrataBackend(lambda k, t: None, "strata/qwen", url, 16384, 0.2, "high")
+        b.messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+        turn = asyncio.run(b.turn())
+        assert turn.calls == [{"tool": "finish", "args": {"status": "done"}}]
+        reply = asyncio.run(b.structured([{"role": "user", "content": "q"}], {"type": "object"}, 0.0, 3))
+        assert reply == {"answer": "2"}
+    finally:
+        srv.shutdown()
+    first, second = seen[0][1], seen[1][1]
+    assert first["reasoning_effort"] == "high" and "stream" not in first and "tools" not in first
+    assert seen[0][0] == "Bearer strata-local"
+    assert second["response_format"]["json_schema"]["schema"] == {"type": "object"} and second["seed"] == 3 and second["temperature"] == 0.0
+
+
+def test_local_backend_picks_strata_by_prefix():
+    from practicum_bridge.platform_agent import OllamaBackend, StrataBackend, local_backend
+
+    note = lambda k, t: None  # noqa: E731
+    s = local_backend(note, "strata/qwen", "http://o", "http://s/v1", None, 0.2)
+    o = local_backend(note, "gpt-oss-32k", "http://o", "http://s/v1", None, 0.2)
+    assert type(s) is StrataBackend and s.base_url == "http://s/v1" and s.api_model == "qwen"
+    assert type(o) is OllamaBackend and o.base_url == "http://o"
+
+
+def test_sidebar_lists_strata_models_with_their_prefix():
+    from practicum_bridge.host import AgentHost
+
+    srv, url, _ = fake_openai_server([])
+    try:
+        assert AgentHost(None, [], strata=url)._strata_models() == ["strata/qwen"]
+    finally:
+        srv.shutdown()
+    assert AgentHost(None, [])._strata_models() == []  # not looked for
+    assert AgentHost(None, [], strata="http://127.0.0.1:1/v1")._strata_models() == []  # not running

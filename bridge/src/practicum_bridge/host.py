@@ -1,8 +1,8 @@
 """The agent the bridge runs itself in agent mode: you talk to it in the extension's sidebar.
 
 The extension tells the bridge its mode ({"type": "mode"}, see link.py). In agent
-mode this host announces an agent to the sidebar, lists the Ollama models for its
-picker, and on the first message opens the same Session that practicum-chat uses
+mode this host announces an agent to the sidebar, lists the Ollama models and
+Strata's ("strata/<id>") for its picker, and on the first message opens the same Session that practicum-chat uses
 (platform_agent.py), with tools called straight through the extension link (tagged
 "agent", so the sidebar tells them from an outside MCP client's calls).
 
@@ -30,7 +30,7 @@ from types import SimpleNamespace
 from .agent_link import HostedChannel
 from .config import CONFIG_DIR
 from .link import ExtensionLink, ToolCallError
-from .platform_agent import OllamaBackend, Outcome, PlatformBackend, Session
+from .platform_agent import STRATA_KEY, OllamaBackend, Outcome, PlatformBackend, Session, StrataBackend, is_strata, local_backend
 from .server import text_result, to_mcp_tool
 
 log = logging.getLogger(__name__)
@@ -81,8 +81,10 @@ class AgentHost:
         rounds: int | None = None,
         log_path: Path = DEFAULT_LOG,
         make_backend: Callable | None = None,  # (client, note, config) -> backend; for tests
+        strata: str = "",  # Strata's OpenAI-compatible base URL; empty: don't look for it
     ):
         self.link, self.ollama, self.default_model, self.rounds = link, ollama.rstrip("/"), model, rounds
+        self.strata = strata.rstrip("/")
         self.client = LinkClient(link, specs)
         self.make_backend = make_backend
         self.log_path = log_path
@@ -119,7 +121,8 @@ class AgentHost:
             if self.channel is not None:
                 if cfg == self.config:
                     return  # the extension reconnected; link.py replayed the agent to it
-                if cfg["backend"] == self.config["backend"] == "ollama" and isinstance(self.backend, OllamaBackend):
+                same_server = is_strata(cfg["model"] or self.default_model or self.model) == isinstance(self.backend, StrataBackend)
+                if cfg["backend"] == self.config["backend"] == "ollama" and isinstance(self.backend, OllamaBackend) and same_server:
                     await self._retune(cfg)  # same conversation, another model or effort
                     return
                 await self._stop()
@@ -130,12 +133,12 @@ class AgentHost:
         self.loop = asyncio.get_running_loop()
         self.channel = HostedChannel(AGENT_NAME, self._emit)
         self.link.emit_agent({"kind": "hello", "name": AGENT_NAME, "chat": True})
-        models = await asyncio.to_thread(self._ollama_models)
+        models = await asyncio.to_thread(self._ollama_models) + await asyncio.to_thread(self._strata_models)
         self.model = self.config["model"] or self.default_model or (models[0] if models else "")
         self.link.emit_agent({"kind": "models", "models": models, "platform": True, "current": self.model})
         self.worker = asyncio.create_task(self._work())
         if self.config["backend"] == "ollama" and not self.model:
-            self.channel.status("stopped", "no Ollama model found: start Ollama, or pick Практикум ИИ")
+            self.channel.status("stopped", "no local model found: start Ollama or Strata, or pick Практикум ИИ")
         else:
             self.channel.status("idle", f"{self._who()} · waiting for your message")
         log.info("agent mode: %s", self._who())
@@ -174,6 +177,18 @@ class AgentHost:
         except (OSError, ValueError):
             return []
         return sorted(n.removesuffix(":latest") for n in names if n)
+
+    def _strata_models(self) -> list[str]:
+        if not self.strata:
+            return []
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        req = urllib.request.Request(f"{self.strata}/models", headers={"authorization": f"Bearer {STRATA_KEY}"})
+        try:
+            with opener.open(req, timeout=3) as r:
+                ids = [m.get("id", "") for m in json.loads(r.read()).get("data", [])]
+        except (OSError, ValueError, AttributeError):
+            return []
+        return sorted(f"strata/{i}" for i in ids if i)
 
     # ── input ───────────────────────────────────────────────────────────────
 
@@ -242,7 +257,7 @@ class AgentHost:
     async def _open(self) -> bool:
         assert self.channel is not None
         if self.config["backend"] == "ollama" and not self.model:
-            self.channel.message("note", "no Ollama model: start Ollama (then switch modes) or pick Практикум ИИ")
+            self.channel.message("note", "no local model: start Ollama or Strata (then switch modes) or pick Практикум ИИ")
             return False
         self.channel.status("thinking", "starting: reading the page")
         if self.make_backend:
@@ -250,7 +265,7 @@ class AgentHost:
         elif self.config["backend"] == "platform":
             backend = PlatformBackend(self.client, self.note)
         else:
-            backend = OllamaBackend(self.note, self.model, self.ollama, None, 0.2, self.config["think"] or None, self.stream)
+            backend = local_backend(self.note, self.model, self.ollama, self.strata, None, 0.2, self.config["think"] or None, self.stream)
         session = Session(self.client, backend, self.note, solver=True)
         session.overlay = self.channel  # status, messages and the solver's questions
         self.backend = backend
@@ -277,7 +292,7 @@ class AgentHost:
         self.link.emit_agent(event)
 
     def stream(self, kind: str, chunk: str) -> None:
-        """Called from Ollama's reading thread for every chunk."""
+        """Called from the local model's reading thread for every chunk."""
         part = "thinking" if kind.endswith(" thinking") else "text"
         key = (self.turn, part)
         if key not in self.streamed and not chunk.strip():

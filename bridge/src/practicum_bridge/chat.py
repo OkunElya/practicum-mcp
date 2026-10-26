@@ -25,7 +25,7 @@ from mcp.client import Client
 
 from .agent_link import PageChannel
 from .call import drop_proxies_for_loopback
-from .platform_agent import OllamaBackend, Outcome, PlatformBackend, Session, visible
+from .platform_agent import STRATA_URL, OllamaBackend, Outcome, PlatformBackend, Session, StrataBackend, is_strata, local_backend, visible
 
 HISTORY_FILE = Path.home() / ".config" / "practicum-mcp" / "chat_history"
 
@@ -46,7 +46,7 @@ A line ending with \\ continues on the next line. Ctrl+C stops the current run."
 
 OLLAMA_HELP = """
   /prompt                 the system prompt the model works with (prompts.py)
-  /model NAME             switch the Ollama model (the conversation is kept)
+  /model NAME             switch the local model (the conversation is kept)
   /think low|medium|high|off|default   reasoning effort
   /temp X                 sampling temperature"""
 
@@ -262,7 +262,9 @@ class Chat:
             case "prompt" if ollama:
                 print(self.backend.system)
             case "model" if ollama:
-                if rest:
+                if rest and is_strata(rest) != isinstance(self.backend, StrataBackend):
+                    say("can't switch between Ollama and Strata in one chat: start practicum-chat again with --model")
+                elif rest:
                     await self.backend.set_model(rest)
                     self.console.model_kinds.add(rest)
                 say(f"model {self.backend.model}, context {self.backend.ctx or '?'}")
@@ -348,7 +350,7 @@ async def amain(a: argparse.Namespace) -> int:
         if a.platform:
             backend = PlatformBackend(client, console, a.keep_chat)
         else:
-            backend = OllamaBackend(console, a.model, a.ollama, a.num_ctx, a.temperature, a.think, None if a.no_stream else console.stream)
+            backend = local_backend(console, a.model, a.ollama, a.strata, a.num_ctx, a.temperature, a.think, None if a.no_stream else console.stream)
         console.model_kinds.add(backend.name)
 
         session = Session(client, backend, console, solver=not a.no_solver)
@@ -371,7 +373,7 @@ async def amain(a: argparse.Namespace) -> int:
 def main() -> None:
     p = argparse.ArgumentParser(prog="practicum-chat", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     who = p.add_mutually_exclusive_group(required=True)
-    who.add_argument("--model", help="Ollama model, e.g. gpt-oss-32k")
+    who.add_argument("--model", help="Ollama model, e.g. gpt-oss-32k, or strata/<id> for a model Strata serves")
     who.add_argument("--platform", action="store_true", help="let Практикум ИИ drive through its chat")
     p.add_argument("--rounds", type=int, help="round limit per message (default: 30 for local models, 10 for Практикум ИИ)")
     p.add_argument("--url", default="http://127.0.0.1:8766/mcp", help="the bridge's MCP endpoint")
@@ -379,6 +381,7 @@ def main() -> None:
     p.add_argument("--verbose", action="store_true", help="print every event in full")
     p.add_argument("--keep-chat", action="store_true", help="(--platform) don't start a new Практикум ИИ chat first")
     p.add_argument("--ollama", default="http://127.0.0.1:11434", help="Ollama base URL")
+    p.add_argument("--strata", default=STRATA_URL, help="Strata's OpenAI-compatible base URL (key: $STRATA_API_KEY, else strata-local)")
     p.add_argument("--num-ctx", type=int, default=None, help="context window to request (default: the model's own setting)")
     p.add_argument("--temperature", type=float, default=0.2, help="0.2 scored best in evals/tune.py")
     p.add_argument("--think", choices=["low", "medium", "high", "off"], help="reasoning effort for models that support it")
